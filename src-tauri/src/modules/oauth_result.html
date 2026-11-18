@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-CN" data-result="{{RESULT}}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>{{TITLE}} · AgyFlux</title>
+  <link rel="icon" href="data:image/png;base64,{{APP_ICON}}">
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #f6f5f2;
+      --card: #fff;
+      --border: #eaeaea;
+      --ink: #24241f;
+      --secondary: #6b6b63;
+      --status: #34744d;
+      --status-bg: #edf5ef;
+      --button: #24241f;
+      --button-hover: #383831;
+      --button-ink: #fff;
+    }
+    :root[data-result="error"] { --status: #a04444; --status-bg: #faeeee; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      min-height: 100svh;
+      display: grid;
+      place-items: center;
+      padding: 32px 20px;
+      background: var(--canvas);
+      color: var(--ink);
+      font-family: "Geist", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .result-card {
+      width: min(100%, 420px);
+      padding: 32px;
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      background: var(--card);
+      text-align: center;
+      box-shadow: 0 8px 28px rgb(25 25 20 / .025);
+      animation: card-enter 560ms cubic-bezier(.16, 1, .3, 1) both;
+    }
+    .brand { display: flex; align-items: center; justify-content: center; gap: 8px; }
+    .brand img { display: block; width: 26px; height: 26px; }
+    .brand-name { font-size: 15px; font-weight: 600; letter-spacing: -.035em; }
+    .status-icon {
+      display: grid;
+      place-items: center;
+      width: 60px;
+      height: 60px;
+      margin: 32px auto 20px;
+      border-radius: 50%;
+      color: var(--status);
+      background: var(--status-bg);
+    }
+    .status-icon svg {
+      width: 28px;
+      height: 28px;
+      transform-origin: center;
+      animation: mark-enter 360ms 160ms ease-out both;
+    }
+    [data-result="success"] .error-mark, [data-result="error"] .success-mark { display: none; }
+    h1 { margin: 0; font-size: 24px; font-weight: 600; line-height: 1.4; letter-spacing: -.035em; }
+    .description { max-width: 300px; margin: 12px auto 0; color: var(--secondary); font-size: 14px; line-height: 1.8; text-wrap: pretty; }
+    .close-button {
+      display: block;
+      width: 100%;
+      min-height: 44px;
+      margin-top: 28px;
+      padding: 11px 20px;
+      border: 1px solid transparent;
+      border-radius: 16px;
+      background: var(--button);
+      color: var(--button-ink);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 20px;
+      cursor: pointer;
+      transition: background-color 180ms ease, transform 180ms ease;
+    }
+    .close-button:hover { background: var(--button-hover); }
+    .close-button:active { transform: scale(.985); }
+    .close-button:focus-visible { outline: 2px solid var(--status); outline-offset: 4px; }
+    .hint { min-height: 40px; margin: 12px 0 0; color: var(--secondary); font-size: 12px; line-height: 20px; }
+    @keyframes card-enter { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+    @keyframes mark-enter { from { opacity: 0; transform: scale(.8); } to { opacity: 1; transform: none; } }
+    @media (max-width: 440px) { .result-card { padding: 28px 24px 24px; } h1 { font-size: 22px; } }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --canvas: #141316;
+        --card: #1a191c;
+        --border: #2e2d31;
+        --ink: #f0efed;
+        --secondary: #aaa7a3;
+        --status: #83c49b;
+        --status-bg: #223229;
+        --button: #e9e7e1;
+        --button-hover: #fff;
+        --button-ink: #24241f;
+      }
+      :root[data-result="error"] { --status: #e3a2a2; --status-bg: #382628; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+    @media (forced-colors: active) {
+      .result-card, .close-button { border-color: CanvasText; }
+      .status-icon { color: CanvasText; }
+    }
+  </style>
+</head>
+<body>
+  <main class="result-card" aria-labelledby="result-title" aria-describedby="result-description">
+    <header class="brand">
+      <img src="data:image/png;base64,{{APP_ICON}}" width="26" height="26" alt="">
+      <span class="brand-name">AgyFlux</span>
+    </header>
+    <div class="status-icon" aria-hidden="true">
+      <svg class="success-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path pathLength="1" d="m5 12 4.5 4.5L19 7"></path></svg>
+      <svg class="error-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path pathLength="1" d="m7 7 10 10M17 7 7 17"></path></svg>
+    </div>
+    <h1 id="result-title">{{TITLE}}</h1>
+    <p class="description" id="result-description">{{DESCRIPTION}}</p>
+    <button class="close-button" id="close-page" type="button">关闭此页</button>
+    <p class="hint" id="close-hint" role="status" aria-live="polite">此页面无需保持打开。</p>
+    <noscript><style>.close-button { display: none; }</style></noscript>
+  </main>
+  <script>
+    (() => {
+      const zh = (navigator.language || 'zh').toLowerCase().startsWith('zh');
+      const success = document.documentElement.dataset.result === 'success';
+      const copy = zh ? {
+        title: success ? '授权信息已收到' : '授权未完成',
+        description: success ? '请返回 AgyFlux，查看账号添加结果。' : '请返回 AgyFlux，重新发起授权。',
+        close: '关闭此页', hint: '此页面无需保持打开。',
+        manual: '请手动关闭当前标签页，然后返回 AgyFlux。'
+      } : {
+        title: success ? 'Authorization received' : 'Authorization incomplete',
+        description: success ? 'Return to AgyFlux to check that your account was added.' : 'Return to AgyFlux and start authorization again.',
+        close: 'Close this page', hint: 'You no longer need to keep this page open.',
+        manual: 'Please close this tab manually and return to AgyFlux.'
+      };
+      document.documentElement.lang = zh ? 'zh-CN' : 'en';
+      document.title = `${copy.title} · AgyFlux`;
+      document.getElementById('result-title').textContent = copy.title;
+      document.getElementById('result-description').textContent = copy.description;
+      const button = document.getElementById('close-page');
+      const hint = document.getElementById('close-hint');
+      button.textContent = copy.close;
+      hint.textContent = copy.hint;
+      // 由浏览器外部打开的标签页可能不允许脚本关闭，留下明确的手动关闭提示。
+      button.addEventListener('click', () => {
+        hint.textContent = copy.manual;
+        window.close();
+      });
+    })();
+  </script>
+</body>
+</html>

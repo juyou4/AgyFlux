@@ -1,0 +1,16 @@
+node_modules/
+dist/
+release/
+src-tauri/target/
+.repair/
+.build-tools/
+.local-data/
+/.env
+/.env.*
+/.cargo/config.toml
+/tests/
+/src-tauri/examples/
+/scripts/fixtures/
+/scripts/verify-windows-icon.ps1
+*.log
+*.tsbuildinfo

@@ -1,0 +1,31 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "AgyFlux",
+        "width": 1024,
+        "height": 700,
+        "transparent": false,
+        "decorations": true,
+        "visible": true
+      }
+    ]
+  },
+  "bundle": {
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/bin/agyflux": "target/release/agyflux"
+        },
+        "depends": [
+          "xdg-utils"
+        ],
+        "recommends": [
+          "gnome-keyring"
+        ]
+      }
+    }
+  },
+  "mainBinaryName": "agyflux-desktop"
+}

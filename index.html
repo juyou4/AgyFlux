@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+  <link rel="icon" type="image/png" sizes="256x256" href="/icon.png" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AgyFlux</title>
+  <script>
+    (function () {
+      try {
+        var isMenubar = window.location.pathname.includes('menubar') ||
+          window.location.hash.includes('menubar') ||
+          window.location.search.includes('menubar');
+        var savedTheme = localStorage.getItem('app-theme-preference');
+        var systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var shouldBeDark = savedTheme === 'dark' || ((!savedTheme || savedTheme === 'system') && systemDark);
+
+        if (isMenubar) {
+          document.documentElement.classList.add('panel-window');
+          document.documentElement.style.setProperty('background-color', 'transparent', 'important');
+        } else {
+          document.documentElement.style.backgroundColor = shouldBeDark ? '#141316' : '#F7F5F3';
+        }
+
+        if (shouldBeDark) {
+          document.documentElement.classList.add('dark');
+          document.documentElement.setAttribute('data-theme', 'dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+          document.documentElement.setAttribute('data-theme', 'light');
+        }
+      } catch (e) {
+        console.error('Failed to apply boot theme:', e);
+      }
+    })();
+  </script>
+  <style>
+    html.panel-window,
+    html.panel-window body,
+    html.panel-window #root {
+      background-color: transparent !important;
+      background: transparent !important;
+      overflow: hidden !important;
+    }
+    body {
+      margin: 0;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+
+</html>

@@ -1,0 +1,801 @@
+:root {
+  color-scheme: light;
+  --bg-page: #f7f5f3;
+  --bg-header: rgba(247, 245, 243, 0.86);
+  --bg-card: #ffffff;
+  --bg-card-hover: #fcfbfa;
+  --surface-soft: #f4f3ef;
+  --surface: #eeede9;
+  --surface-hover: #e5e3dd;
+  --border-hairline: rgba(25, 25, 20, 0.06);
+  --border-strong: rgba(25, 25, 20, 0.11);
+  --ink: #191914;
+  --ink-secondary: #62625b;
+  --ink-muted: #8f9088;
+  --accent: #3a3a34;
+  --accent-soft: #eae8e2;
+  --primary-soft: #eae8e2;
+  --primary-soft-hover: #dfddd5;
+  --primary-border: rgba(25, 25, 20, 0.10);
+  --primary-ink: #191914;
+  --primary-solid: #3a3a34;
+  --nav-pill: #2b2b26;
+  --emerald: #25c65b;
+  --emerald-soft: #eaf9ef;
+  --emerald-ink: #147a38;
+  --amber: #d68b18;
+  --amber-soft: #fdf5e4;
+  --amber-ink: #8f5700;
+  --rose: #d93552;
+  --rose-soft: #fae8eb;
+  --rose-ink: #a12036;
+
+  --shadow-shell: 0 1px 2px rgba(25, 25, 20, 0.035), 0 10px 22px -12px rgba(38, 36, 25, 0.12);
+  --shadow-card: 0 1px 2px rgba(25, 25, 20, 0.025), 0 10px 24px -12px rgba(38, 36, 25, 0.07);
+  --shadow-popover: 0 2px 3px rgba(25, 25, 20, 0.04), 0 20px 38px -14px rgba(36, 38, 25, 0.18);
+  --shell-recessed: #efeee9;
+  --shell-border: rgba(25, 25, 20, 0.055);
+  --card-elevated-shadow: 0 1px 2px rgba(25, 25, 20, 0.025), 0 12px 28px -12px rgba(38, 36, 25, 0.075);
+  --card-hover-shadow: 0 2px 4px rgba(25, 25, 20, 0.035), 0 18px 38px -12px rgba(38, 36, 25, 0.11);
+
+  /* Calibrated floating spring curves (~1–3.8% settle, zero excessive bounce) */
+  --sp-snap: linear(0,0.0278,0.0973,0.1913,0.297,0.405,0.5089,0.6048,0.6901,0.7638,0.8259,0.877,0.9178,0.9497,0.9738,0.9915,1.0039,1.012,1.0169,1.0193,1.0199,1.0193,1.0179,1.016,1.0139,1.0117,1.0097,1);
+  --t-snap: 340ms;
+  --sp-soft: linear(0,0.0196,0.0689,0.136,0.2128,0.293,0.3727,0.4491,0.5205,0.5858,0.6448,0.6973,0.7435,0.7839,0.8188,0.8488,0.8745,0.8962,0.9146,0.9301,0.9429,0.9537,0.9625,0.9698,0.9758,0.9807,0.9847,1);
+  --t-soft: 260ms;
+  --sp-pop: linear(0,0.0312,0.1094,0.2149,0.3328,0.4523,0.5659,0.6687,0.7582,0.8333,0.8943,0.942,0.9779,1.0037,1.021,1.0316,1.0369,1.0384,1.0372,1.0341,1.0301,1.0255,1.0209,1.0166,1.0126,1.0092,1.0063,1);
+  --t-pop: 360ms;
+  --sp-quick: linear(0,0.0236,0.0833,0.1653,0.2591,0.3568,0.4529,0.5436,0.6265,0.7005,0.7648,0.8198,0.8657,0.9035,0.9338,0.9577,0.9761,0.9899,0.9999,1.0068,1.0112,1.0138,1.015,1.0151,1.0145,1.0135,1.0122,1);
+  --t-quick: 260ms;
+  --sp-panel: linear(0,0.0279,0.0971,0.19,0.2936,0.3988,0.4997,0.5924,0.6749,0.7464,0.8068,0.8567,0.8972,0.9292,0.9541,0.9729,0.9867,0.9966,1.0032,1.0075,1.0099,1.0109,1.0111,1.0106,1.0097,1.0086,1.0074,1);
+  --t-panel: 360ms;
+  --ease-out-expo: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html.dark {
+  color-scheme: dark;
+  --bg-page: #141316;
+  --bg-header: rgba(20, 19, 22, 0.86);
+  --bg-card: #1a191c;
+  --bg-card-hover: #201f24;
+  --surface-soft: #201f24;
+  --surface: #242327;
+  --surface-hover: #2c2b30;
+  --border-hairline: rgba(255, 255, 255, 0.085);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --ink: #f4f4f5;
+  --ink-secondary: #a1a1aa;
+  --ink-muted: #71717a;
+  --accent: #e4e4e7;
+  --accent-soft: rgba(255, 255, 255, 0.10);
+  --primary-soft: #2c2b30;
+  --primary-soft-hover: #36353b;
+  --primary-border: rgba(255, 255, 255, 0.13);
+  --primary-ink: #f4f4f5;
+  --primary-solid: #e4e4e7;
+  --nav-pill: #f4f4f5;
+  --emerald: #26cf62;
+  --emerald-soft: rgba(38, 207, 98, 0.14);
+  --emerald-ink: #6ee79a;
+  --amber: #e6a23c;
+  --amber-soft: rgba(230, 162, 60, 0.15);
+  --amber-ink: #f6c46b;
+  --rose: #eb4d68;
+  --rose-soft: rgba(235, 77, 104, 0.15);
+  --rose-ink: #ff8ca0;
+
+  --shadow-shell: 0 4px 14px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-popover: 0 24px 48px -12px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --shell-recessed: #18171b;
+  --shell-border: rgba(255, 255, 255, 0.075);
+  --card-elevated-shadow: 0 6px 18px -2px rgba(0, 0, 0, 0.42), 0 2px 6px -1px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --card-hover-shadow: 0 16px 34px -6px rgba(0, 0, 0, 0.58), 0 6px 14px -2px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* Tactile Press */
+.tactile-press {
+  transition: transform var(--t-soft) var(--sp-soft), background-color 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 220ms ease;
+}
+.tactile-press:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+/* 15-胶囊导航：滑块、按钮与标签槽共用曲线，连续切换从当前呈现位置接续。 */
+.mk-capnav-indicator {
+  transition: transform var(--t-snap) var(--sp-snap), width var(--t-snap) var(--sp-snap);
+  will-change: transform;
+}
+.mk-capnav-item {
+  transition:
+    width var(--t-snap) var(--sp-snap),
+    color 220ms ease,
+    transform var(--t-soft) var(--sp-soft);
+}
+.mk-capnav-item:active {
+  transform: scale(0.96);
+}
+.mk-capnav-slot {
+  transition: width var(--t-snap) var(--sp-snap);
+}
+.mk-capnav-label {
+  opacity: 0;
+  filter: blur(5px);
+  transform: translateX(-4px);
+  transition: opacity 150ms ease, filter 220ms ease, transform var(--t-snap) var(--sp-snap);
+}
+.mk-capnav-item[data-selected="true"] .mk-capnav-label {
+  opacity: 1;
+  filter: blur(0);
+  transform: translateX(0);
+  transition:
+    opacity 260ms ease 80ms,
+    filter 280ms ease 80ms,
+    transform var(--t-snap) var(--sp-snap);
+}
+.mk-capnav-badge {
+  transition: transform var(--t-snap) var(--sp-snap);
+}
+.mk-capnav-badge-dot {
+  box-shadow: 0 0 0 2px var(--bg-card);
+  transition: box-shadow 180ms ease;
+}
+.mk-capnav-item[data-selected="true"] .mk-capnav-badge-dot {
+  box-shadow: 0 0 0 0 var(--bg-card);
+}
+.mk-capnav[data-anim="off"] *,
+.mk-capnav[data-anim="off"] *::before,
+.mk-capnav[data-anim="off"] *::after {
+  transition: none !important;
+}
+
+/* 11-下拉菜单：持久胶囊触发器 + 锚点悬浮浮层 + 悬停跟随底块 */
+.mk-dd-popover {
+  opacity: 0;
+  filter: blur(4px);
+  transform: translateY(-4px) scale(0.97);
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 180ms ease,
+    filter 200ms ease,
+    transform 240ms var(--ease-out-expo),
+    visibility 0s linear 180ms;
+}
+.mk-dd-popover[data-open="true"] {
+  opacity: 1;
+  filter: blur(0);
+  transform: translateY(0) scale(1);
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+.mk-dd-hl {
+  opacity: 0;
+  transition: transform 220ms var(--ease-out-expo), opacity 140ms ease;
+}
+.mk-dd-popover[data-open="true"] .mk-dd-options:is(:hover, :focus-within) .mk-dd-hl {
+  opacity: 1;
+}
+.mk-dd-option {
+  white-space: nowrap;
+}
+@keyframes mk-dd-reveal {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.mk-dd-popover[data-open="true"] .mk-dd-option {
+  animation: mk-dd-reveal 240ms var(--ease-out-expo) backwards;
+  animation-delay: calc(var(--i, 0) * 18ms);
+}
+
+/* 14-账号操作菜单：固定到视口中的触发位置，向内侧展开。 */
+.mk-action-menu {
+  box-shadow: var(--shadow-card);
+  transition: width var(--t-snap) var(--sp-snap), height var(--t-snap) var(--sp-snap), border-radius var(--t-snap) var(--sp-snap), box-shadow 200ms ease;
+}
+.mk-action-menu[data-expanded="true"] { box-shadow: var(--shadow-popover); }
+.mk-action-menu-content {
+  opacity: 0;
+  filter: blur(6px);
+  transform: translateX(8px);
+  visibility: hidden;
+  transition: opacity 160ms ease, filter 260ms ease, transform var(--t-snap) var(--sp-snap), visibility 0s linear 160ms;
+}
+.mk-action-menu[data-expanded="true"] .mk-action-menu-content {
+  opacity: 1;
+  filter: blur(0);
+  transform: translateX(0);
+  visibility: visible;
+  transition-delay: 0s;
+}
+.mk-action-menu-highlight { transition: transform var(--t-snap) var(--sp-snap); }
+.mk-action-menu[data-expanded="true"] [role="menuitem"] {
+  animation: mk-dd-reveal 320ms var(--ease-out-expo) both;
+  animation-delay: calc(var(--menu-index, 0) * 25ms);
+}
+
+/* 授权与账号切换：状态变化描边，执行中保持单一旋转环。 */
+.mk-status-icon { animation: mk-status-enter 220ms var(--ease-out-expo) both; }
+.mk-status-ring, .mk-status-mark { stroke-dasharray: 1; animation: mk-status-draw 300ms var(--ease-out-expo) both; }
+.mk-status-mark { animation-delay: 70ms; }
+.mk-status-orbit { transform-origin: 12px 12px; animation: mk-spin 900ms linear infinite; }
+.mk-status-text { animation: mk-status-enter 220ms var(--ease-out-expo) both; }
+.mk-status-chevron { transition: transform var(--t-snap) var(--sp-snap); }
+.mk-oauth-status { transition: background-color 220ms ease, border-color 220ms ease; }
+.mk-oauth-status[data-stage="success"] { background: var(--emerald-soft); border-color: color-mix(in srgb, var(--emerald) 24%, var(--border-hairline)); }
+.mk-oauth-status[data-stage="error"] { border-color: color-mix(in srgb, var(--rose) 32%, var(--border-hairline)); }
+@keyframes mk-status-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes mk-status-enter { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+
+/* 13-手风琴完整版：外层高度平滑展开 + 内层文字/控件延迟去模糊浮现 */
+.drawer-grid {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 420ms var(--ease-out-expo), opacity 220ms ease;
+  opacity: 0;
+}
+.drawer-grid[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.drawer-grid-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+.drawer-grid-content {
+  opacity: 0;
+  transform: translateY(7px);
+  filter: blur(5px);
+  transition:
+    opacity 180ms ease,
+    transform 340ms var(--ease-out-expo),
+    filter 320ms ease;
+}
+.drawer-grid[data-open="true"] .drawer-grid-content {
+  opacity: 1;
+  transform: none;
+  filter: blur(0px);
+  transition-delay: 85ms;
+}
+
+/* 04-长按删除完成闪红回退动画 */
+@keyframes mk-deleted-flash {
+  from {
+    background-color: var(--rose);
+    color: #ffffff;
+  }
+  to {
+    background-color: var(--rose-soft);
+    color: var(--rose-ink);
+  }
+}
+.mk-deleted-flash {
+  animation: mk-deleted-flash 500ms ease-out both;
+}
+
+/* 16-复制命令勾号旋入：参考 checkIn .35s（默认 ease），scale(.6) rotate(-15deg) → 原位 */
+@keyframes mk-check-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6) rotate(-15deg);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+.mk-check-in {
+  animation: mk-check-in 350ms ease both;
+}
+
+/* Confirmation Light Sweep (05-保存按钮：.pill.success::after，延迟 .28s、0.75s 扫过) */
+.mk-shine {
+  position: relative;
+  overflow: hidden;
+}
+.mk-shine::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, 0.5) 50%, transparent 70%);
+  transform: translateX(-130%);
+  animation: mk-shine-sweep 750ms 280ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  pointer-events: none;
+}
+@keyframes mk-shine-sweep {
+  to { transform: translateX(130%); }
+}
+
+/* 23-AI生成表格：骨架微光 + 从右向左揭示扫光 */
+.mk-skeleton {
+  background: linear-gradient(105deg, var(--surface) 22%, var(--surface-hover) 46%, var(--surface) 70%);
+  background-size: 200% 100%;
+  animation: mk-shimmer 1.25s infinite linear;
+}
+@keyframes mk-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes mk-reveal-wave-sweep {
+  0% { transform: translateX(65%) skewX(-18deg); opacity: 0; }
+  15% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { transform: translateX(-185%) skewX(-18deg); opacity: 0; }
+}
+.mk-reveal-wave {
+  position: relative;
+  overflow: hidden;
+}
+.mk-reveal-wave-beam {
+  position: absolute;
+  top: -20%;
+  bottom: -20%;
+  right: -20%;
+  width: 55%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--accent) 10%, transparent) 30%,
+    color-mix(in srgb, var(--accent) 18%, transparent) 52%,
+    color-mix(in srgb, var(--accent) 8%, transparent) 76%,
+    transparent 100%
+  );
+  filter: blur(14px);
+  pointer-events: none;
+  z-index: 20;
+  animation: mk-reveal-wave-sweep 860ms cubic-bezier(0.35, 0.15, 0.3, 1) forwards;
+}
+
+/* Per-Character Vertical Rolling Odometer (上下文用量弹窗) */
+.odo-group {
+  display: inline-flex;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+.odo-slot {
+  display: inline-block;
+  position: relative;
+  overflow: hidden;
+  height: 1.2em;
+  line-height: 1.2em;
+  vertical-align: bottom;
+}
+.odo-char-cur,
+.odo-char-old {
+  display: block;
+  height: 1.2em;
+  line-height: 1.2em;
+  will-change: transform, opacity, filter;
+}
+.odo-char-old {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+}
+@keyframes rollUpIn {
+  0% { transform: translateY(95%); opacity: 0.15; filter: blur(0.8px); }
+  100% { transform: translateY(0%); opacity: 1; filter: blur(0px); }
+}
+@keyframes rollUpOut {
+  0% { transform: translateY(0%); opacity: 1; filter: blur(0px); }
+  100% { transform: translateY(-95%); opacity: 0; filter: blur(0.8px); }
+}
+@keyframes rollDownIn {
+  0% { transform: translateY(-95%); opacity: 0.15; filter: blur(0.8px); }
+  100% { transform: translateY(0%); opacity: 1; filter: blur(0px); }
+}
+@keyframes rollDownOut {
+  0% { transform: translateY(0%); opacity: 1; filter: blur(0px); }
+  100% { transform: translateY(95%); opacity: 0; filter: blur(0.8px); }
+}
+.odo-up-in { animation: rollUpIn 300ms var(--ease-out-expo) forwards; }
+.odo-up-out { animation: rollUpOut 260ms var(--ease-out-expo) forwards; }
+.odo-down-in { animation: rollDownIn 300ms var(--ease-out-expo) forwards; }
+.odo-down-out { animation: rollDownOut 260ms var(--ease-out-expo) forwards; }
+
+/* MK-ENGINE popNumber：离场残影绝对叠放，避免与新文案并排撑宽产生闪烁跳变 */
+.mk-pop-number {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: baseline;
+}
+.mk-pop-number-inn {
+  display: inline-block;
+  will-change: transform, opacity, filter;
+}
+.mk-pop-number-ghosts {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  align-items: center;
+  overflow: visible;
+}
+.mk-pop-number-ghost {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: inline-block;
+  white-space: nowrap;
+  pointer-events: none;
+  will-change: transform, opacity, filter;
+}
+
+/* Staggered Card Reveal */
+@keyframes mk-enter {
+  from {
+    opacity: 0;
+    filter: blur(6px);
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0) scale(1);
+  }
+}
+/*
+ * 注意：入场类动画统一使用 backwards 填充而非 both。
+ * both 会在动画结束后把 transform/filter 永久钉在元素上，导致
+ * 1) .elevated-card-hover 的悬停上浮被动画终态覆盖而失效；
+ * 2) 元素长期持有 filter/transform 形成层叠上下文，内部下拉菜单会被后续卡片遮挡。
+ */
+.mk-stagger {
+  animation: mk-enter 460ms var(--ease-out-expo) backwards;
+  animation-delay: calc(60ms + var(--stagger-index, 0) * 45ms);
+}
+
+/* Route / Tab Page Enter：按导航方向横向错位进入（--page-dx 由 Layout 注入） */
+@keyframes mk-page-enter {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translate3d(var(--page-dx, 0px), 6px, 0);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+  }
+}
+.mk-page-enter {
+  animation: mk-page-enter 360ms var(--ease-out-expo) backwards;
+}
+/* 页面整体已做模糊入场，内部卡片只保留位移+淡入，避免双层 blur 叠加带来的糊屏与掉帧 */
+.mk-page-enter .mk-stagger {
+  animation-name: mk-enter-lite;
+}
+@keyframes mk-enter-lite {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Recessed Double-Shell & Elevated Inner Card (上下文用量弹窗 & 智能体任务收件箱) */
+.recessed-shell {
+  background: var(--shell-recessed);
+  border: 1px solid var(--shell-border);
+  border-radius: 28px;
+  padding: 6px;
+}
+
+.elevated-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-hairline);
+  border-radius: 28px;
+  box-shadow: var(--card-elevated-shadow);
+  transition:
+    transform 280ms var(--ease-out-expo),
+    box-shadow 280ms var(--ease-out-expo),
+    border-color 220ms ease,
+    background-color 200ms ease;
+}
+
+/* Segmented-capsule controlled content morph transition */
+@keyframes mk-capsule-switch {
+  0% {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translateY(4px) scale(0.992);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0px);
+    transform: translateY(0) scale(1);
+  }
+}
+.mk-capsule-switch {
+  animation: mk-capsule-switch 280ms var(--ease-out-expo) backwards;
+}
+
+.elevated-card-hover:hover {
+  transform: translateY(-1.5px);
+  box-shadow: var(--card-hover-shadow);
+  border-color: var(--border-strong);
+}
+
+/* Dotted underline label that sharpens on active/hover (上下文用量检查器) */
+.dotted-label {
+  background-image: linear-gradient(to right, var(--ink-muted) 36%, transparent 0%);
+  background-position: bottom;
+  background-size: 4.5px 1.5px;
+  background-repeat: repeat-x;
+  padding-bottom: 2px;
+  transition: background-image 200ms ease, color 200ms ease;
+}
+.group:hover .dotted-label,
+.is-active .dotted-label {
+  background-image: linear-gradient(to right, var(--ink) 55%, transparent 0%);
+  color: var(--ink);
+}
+
+/* Radar Ping Status Ring (十组UI控件合集) */
+@keyframes softPing {
+  0% { transform: scale(1); opacity: 0.65; }
+  80%, 100% { transform: scale(2.35); opacity: 0; }
+}
+.status-ping-ring {
+  animation: softPing 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* Dual-layer crossfade (上下文用量弹窗 & 访问来源环形图) */
+.sub-layer,
+.center-layer {
+  will-change: opacity, transform;
+  transition:
+    opacity 220ms var(--ease-out-expo),
+    transform 240ms var(--ease-out-expo);
+}
+.layer-enter-init {
+  opacity: 0;
+  transform: translateY(-5px) scale(0.96);
+  transition: none !important;
+}
+.layer-active {
+  opacity: 1;
+  transform: translateY(0px) scale(1);
+}
+.layer-exit {
+  opacity: 0;
+  transform: translateY(5px) scale(0.96);
+}
+
+.active-cat-pill {
+  opacity: 0;
+  transform: translateX(-4px) scale(0.94);
+  transition:
+    opacity 220ms var(--ease-out-expo),
+    transform 240ms var(--ease-out-expo),
+    background-color 200ms ease,
+    color 200ms ease;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.active-cat-pill.visible {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+}
+
+/* View Transition API for Theme Toggle */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-old(root) { z-index: 1; }
+::view-transition-new(root) { z-index: 9999; }
+html.dark::view-transition-old(root) { z-index: 9999; }
+html.dark::view-transition-new(root) { z-index: 1; }
+
+/* ===== [L] 页面级：图标切换 / 配额进度条 / 弹窗 ===== */
+
+/* 顶栏图标与短文案切换：模糊缩放落定（主题按钮附带旋入） */
+@keyframes mk-icon-swap {
+  from {
+    opacity: 0;
+    filter: blur(3px);
+    transform: translateY(5px) scale(0.6);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+  }
+}
+@keyframes mk-icon-swap-spin {
+  from {
+    opacity: 0;
+    filter: blur(3px);
+    transform: rotate(-90deg) scale(0.5);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+  }
+}
+.mk-icon-swap {
+  animation: mk-icon-swap var(--t-snap) var(--sp-snap) backwards;
+}
+.mk-icon-swap--spin {
+  animation-name: mk-icon-swap-spin;
+  animation-duration: var(--t-pop);
+  animation-timing-function: var(--sp-pop);
+}
+
+/* 配额进度条：整条满宽填充用 translateX 推进（纯合成层），挂载时从 0 生长 */
+.mk-meter-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  transform: translateX(calc(var(--meter-pct, 0%) - 100%));
+  transition:
+    transform 720ms var(--ease-out-expo),
+    background-color 260ms ease;
+  will-change: transform;
+}
+@keyframes mk-meter-grow {
+  from {
+    transform: translateX(-100%);
+  }
+}
+.mk-meter-fill--enter {
+  animation: mk-meter-grow 900ms var(--ease-out-expo) backwards;
+  animation-delay: calc(140ms + var(--meter-index, 0) * 55ms);
+}
+
+/* 弹窗：遮罩淡入淡出 + 面板弹簧缩放落定 / 加速收起 */
+@keyframes mk-backdrop-in {
+  from { opacity: 0; }
+}
+@keyframes mk-backdrop-out {
+  to { opacity: 0; }
+}
+@keyframes mk-dialog-in {
+  from {
+    transform: translateY(14px) scale(0.94);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes mk-dialog-out {
+  from {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    filter: blur(5px);
+    transform: translateY(8px) scale(0.96);
+  }
+}
+.mk-backdrop {
+  animation: mk-backdrop-in 240ms ease-out backwards;
+}
+.mk-backdrop[data-state="closing"] {
+  animation: mk-backdrop-out 200ms ease-in forwards;
+}
+.mk-dialog {
+  animation:
+    mk-dialog-in var(--t-panel) var(--sp-panel) backwards,
+    mk-fade-only 260ms ease-out backwards;
+}
+@keyframes mk-fade-only {
+  from { opacity: 0; filter: blur(6px); }
+}
+.mk-backdrop[data-state="closing"] .mk-dialog {
+  animation: mk-dialog-out 190ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+/* ===== [B] 按钮/通知 ===== */
+/* 05-保存按钮：加载态细环（半透明底环 + 实色顶边，0.8s 匀速旋转），颜色跟随 currentColor 适配亮/暗主题 */
+@keyframes mk-spin {
+  to { transform: rotate(360deg); }
+}
+.mk-spinner {
+  display: inline-block;
+  flex: none;
+  box-sizing: border-box;
+  border-radius: 9999px;
+  border: 2px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-top-color: currentColor;
+  animation: mk-spin 0.8s linear infinite;
+}
+/* 形变幽灵层（旧内容快照）：不重播勾号旋入等入场动画 */
+.mk-ghost-layer .mk-check-in {
+  animation: none;
+}
+
+/* 套餐文字：复用 Pro 示例的五色环绕轨迹，小字号使用更深的日间色值。 */
+.mk-tier-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  vertical-align: middle;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  color: var(--ink-secondary);
+}
+.mk-tier-badge--badge {
+  padding: 2px 9px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 999px;
+  background: var(--surface);
+}
+.mk-tier-badge--badge[data-paid="true"] { background: var(--bg-card); }
+.mk-tier-badge[data-paid="true"] { font-size: 12px; }
+.mk-tier-badge[data-tier="unknown"] { color: var(--ink-muted); }
+.mk-orbit-text {
+  --mk-orbit-base: #566173;
+  --mk-orbit-cyan: 0 116 159;
+  --mk-orbit-green: 0 126 78;
+  --mk-orbit-violet: 115 61 197;
+  --mk-orbit-amber: 175 85 13;
+  --mk-orbit-rose: 185 35 104;
+  display: inline-block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+html.dark .mk-orbit-text {
+  --mk-orbit-base: #87909b;
+  --mk-orbit-cyan: 71 204 240;
+  --mk-orbit-green: 80 215 159;
+  --mk-orbit-violet: 180 148 255;
+  --mk-orbit-amber: 255 179 91;
+  --mk-orbit-rose: 250 129 186;
+}
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  .mk-orbit-text {
+    background-color: var(--mk-orbit-base);
+    background-image:
+      radial-gradient(66% 96% at var(--mk-orbit-1, 18% 66%), rgb(var(--mk-orbit-cyan) / .96) 0%, rgb(var(--mk-orbit-cyan) / .56) 46%, rgb(var(--mk-orbit-cyan) / 0) 76%),
+      radial-gradient(64% 94% at var(--mk-orbit-2, 48% 52%), rgb(var(--mk-orbit-green) / .96) 0%, rgb(var(--mk-orbit-green) / .52) 48%, rgb(var(--mk-orbit-green) / 0) 78%),
+      radial-gradient(64% 96% at var(--mk-orbit-3, 82% 56%), rgb(var(--mk-orbit-violet) / .94) 0%, rgb(var(--mk-orbit-violet) / .5) 46%, rgb(var(--mk-orbit-violet) / 0) 76%),
+      radial-gradient(62% 92% at var(--mk-orbit-4, 28% 12%), rgb(var(--mk-orbit-amber) / .94) 0%, rgb(var(--mk-orbit-amber) / .48) 46%, rgb(var(--mk-orbit-amber) / 0) 76%),
+      radial-gradient(64% 94% at var(--mk-orbit-5, 68% 22%), rgb(var(--mk-orbit-rose) / .94) 0%, rgb(var(--mk-orbit-rose) / .5) 46%, rgb(var(--mk-orbit-rose) / 0) 76%);
+    background-repeat: no-repeat;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+  }
+}
+@media (forced-colors: active) {
+  .mk-orbit-text {
+    background: none;
+    color: CanvasText;
+    -webkit-text-fill-color: currentColor;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-delay: 0s !important;
+    transition-duration: 0.001ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+  /* 放在通用规则后，确保加载环按较慢速度转动。 */
+  .mk-spinner { animation-duration: 1.6s !important; }
+  .mk-status-icon, .mk-status-icon *, .mk-status-text, .mk-account-skeleton .mk-skeleton {
+    animation: none !important;
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "AgyFlux",
+  "source": "agyflux-rounded-source.png",
+  "original": "agyflux-source.png",
+  "corner_style": "rounded-square",
+  "transparent_corners": true,
+  "ico": "../../src-tauri/icons/icon.ico",
+  "windows_sizes": [
+    16,
+    20,
+    24,
+    30,
+    32,
+    36,
+    40,
+    48,
+    60,
+    64,
+    72,
+    80,
+    96,
+    128,
+    192,
+    256
+  ],
+  "color_depth": 32,
+  "frame_encoding": "PNG RGBA",
+  "generator": "npm run icons"
+}
