@@ -11,7 +11,6 @@ interface SpringMeterProps {
 
 /**
  * SpringMeter
- * 配额进度条：参考 E:\ui动效\02-AI对话与输入界面\上下文用量检查器 的胶囊进度条。
  * 1) 填充层恒为满宽，用 translateX 推进（纯合成层，不触发每帧布局，替代原 width 过渡）；
  * 2) 首次挂载时从 0 平滑生长，同组按 index 交错；
  * 3) 数值变化沿用 ease-out-expo 平滑推进，颜色阈值切换渐变。

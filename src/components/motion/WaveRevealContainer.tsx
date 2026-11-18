@@ -10,7 +10,6 @@ interface WaveRevealContainerProps {
 
 /**
  * WaveRevealContainer
- * 复刻自 E:\ui动效\09-视频复刻组件库-23件套\components\23-AI生成表格-骨架屏扫光与逐行显现.html：
  * 当配额刷新或异步数据落盘时，在容器上层执行一次自右向左的柔和斜带光束揭示。
  */
 export function WaveRevealContainer({ waveKey, children, className = '' }: WaveRevealContainerProps) {

@@ -16,7 +16,6 @@ interface ExpandableSearchPillProps {
 
 /**
  * ExpandableSearchPill
- * 完整复刻 E:\ui动效\09-视频复刻组件库-23件套\components\08-可伸缩搜索框-键盘筛选与列表展开.html：
  * 1) 胶囊从 36px 弹簧横向展开（--sp-snap），输入框与清空键执行 blur(6px)->0 渐现；
  * 2) 若传入 suggestions，支持悬浮面板弹落展开、滑动高亮底块（--sp-snap）、上下键导航与回车选择；
  * 3) 全局快捷键 "/" 唤醒聚焦，Escape 收起或清空。

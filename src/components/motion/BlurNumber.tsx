@@ -277,7 +277,7 @@ function CrossfadeValue({ value, className = '' }: { value: string; className?: 
 
 /**
  * BlurNumber / MorphText
- * 复刻 E:\ui动效 MK-ENGINE popNumber（02-购物数量、19-点赞、17-同步）与 上下文用量弹窗 Odometer：
+ * 数值切换参考 MK-ENGINE 的 popNumber 和 Odometer 动效。
  * - crossfade：离场层独立模糊上浮退出（可叠加、不互相打断）+ 进场层反向模糊缩放落定 + 宽度弹簧让位；
  * - odometer：以右端对齐的稳定槽位逐字符滚动，未变化字符不重挂载，位数增减不错位。
  */

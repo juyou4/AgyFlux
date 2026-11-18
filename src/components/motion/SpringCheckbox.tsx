@@ -11,7 +11,6 @@ interface SpringCheckboxProps {
 
 /**
  * SpringCheckbox
- * 灵感源自 E:\ui动效\09-视频复刻组件库-23件套\components\12-通知设置面板：
  * 自定义超椭圆/圆润复选框，勾选态使用 --sp-snap 弹簧缩放浮现对勾。
  */
 export function SpringCheckbox({

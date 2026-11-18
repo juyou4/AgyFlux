@@ -1,5 +1,5 @@
 /**
- * E:\ui动效\09-视频复刻组件库-23件套 核心物理弹簧曲线与动效引擎 (MK-ENGINE)
+ * MK-ENGINE 的弹簧曲线与动效参数。
  */
 
 export interface MkSpringSpec {

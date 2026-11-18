@@ -26,8 +26,7 @@ const SUCCESS_HOLD_MS = 2000;
 
 /**
  * MorphActionButton
- * 复刻 E:\ui动效\09-视频复刻组件库-23件套\components\05-保存按钮状态-加载旋转与绿色确认.html
- * 与 MK-ENGINE reconcile()：
+ * 状态过渡参考 MK-ENGINE 的 reconcile()。
  * 1) 同一个按钮元素在 idle → loading → success → idle 间形变，宽度在绘制前 FLIP（变宽 MK.snap、变窄 MK.soft），
  *    被打断时从当前动画宽度继续，不跳变；
  * 2) 旧内容快照 150ms blur(7px)+scale(.9) 退场，新内容延迟 60ms、240ms 去模糊浮现（反向回 idle 同样走这一套）；

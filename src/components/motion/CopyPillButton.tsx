@@ -27,8 +27,7 @@ const STATE_STYLE: Record<Exclude<CopyState, 'idle'>, CSSProperties> = {
 
 /**
  * CopyPillButton
- * 复刻自 E:\ui动效\09-视频复刻组件库-23件套\components\16-复制命令按钮-宽度扩充与勾号反馈.html：
- * 1) 胶囊宽度在绘制前 FLIP，扩充与收缩都走 MK.snap（参考中 width 过渡统一为 --sp-snap）；
+ * 1) 胶囊在绘制前进行 FLIP 宽度过渡，扩张和收缩均使用 MK.snap；
  * 2) 背景/文字 .25s 过渡到绿色，勾号 .35s scale(.6) rotate(-15deg) 旋入，重复复制会重播勾号；
  * 3) 文案以 morphText 方式切换：新文案自下方 9px、blur(5px) 320ms 浮现（无旧文案残影、无闪烁）；
  * 4) 1.8s 后收缩回原态；剪贴板不可用时给出失败反馈而不是静默无响应。

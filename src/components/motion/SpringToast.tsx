@@ -158,7 +158,6 @@ function ToastPill({
 
 /**
  * SpringToastContainer
- * 完整复刻 E:\ui动效\09-视频复刻组件库-23件套\components\07-顶部通知弹窗-弹簧弹入与自动消失.html：
  * 弹簧下拉入场 + 重复触发回弹推力 + Escape 快捷键收起 + 模糊收缩离场完整生命周期。
  */
 export function SpringToastContainer() {

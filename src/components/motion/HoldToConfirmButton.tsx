@@ -19,7 +19,6 @@ type HoldPhase = 'idle' | 'undoable';
 
 /**
  * HoldToConfirmButton
- * 完整复刻 E:\ui动效\09-视频复刻组件库-23件套\components\04-长按删除与撤销-进度填充与倒计时撤销.html：
  * 1) 按住触发水平 clip-path 红色填充进度，松手回弹取消；
  * 2) 满格后闪红回落并形态拆分为「已确认 + 圆形倒计时环撤销」双胶囊；
  * 3) 点击 Undo 即刻中断并弹簧恢复原态，倒计时结束才真正触发 onConfirm。

@@ -16,7 +16,6 @@ interface SpringNumberInputProps {
 
 /**
  * SpringNumberInput
- * 灵感源自 E:\ui动效\09-视频复刻组件库-23件套\components\02-购物数量与结算：
  * 圆润胶囊步进器 + 左右触感圆形加减按钮 + 等宽数字居中输入框。
  */
 export function SpringNumberInput({

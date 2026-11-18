@@ -67,7 +67,7 @@ function rayOffsetPoint(cx: number, cy: number, angleRad: number, dPar: number, 
 }
 
 /**
- * 闭式圆角环形扇区路径生成（移植自 E:\ui动效\02-AI对话与输入界面\上下文用量弹窗-环形图与弹簧三端联动.html）
+ * 生成闭式圆角环形扇区路径。
  * 在小占比扇区与极限大扇区下均可生成平行直边间隙与真实圆弧倒角。
  */
 function createRoundedDonutArcPath(
@@ -181,8 +181,6 @@ function easeOutCubic(t: number) {
 
 /**
  * TriLinkedRingChart
- * 完整复刻 E:\ui动效\02-AI对话与输入界面\上下文用量弹窗-环形图与弹簧三端联动.html
- * 与 E:\ui动效\05-数据可视化\访问来源环形图-图例联动高亮.html：
  * 1) 闭式圆角扇区环形 SVG 路径，配合中心极坐标实时命中检测与 bisector 径向膨胀阴影；
  * 2) 统一 60fps requestAnimationFrame 数值缓动 + 谐振弹簧（stiffness 290 / damping 24）；
  * 3) 圆环扇区、顶部横向多段进度条 (.seg-bar-track)、列表明细行 (.cat-row + 共享滑动底块) 三端严密联动；

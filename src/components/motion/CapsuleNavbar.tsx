@@ -40,10 +40,8 @@ function sameMetrics(a: NavMetrics | null, b: NavMetrics): boolean {
 
 /**
  * CapsuleNavbar
- * 复刻 E:\ui动效\09-视频复刻组件库-23件套\components\15-胶囊导航栏-共享黑底滑块与角标移动.html：
- * 1) 参考实现中按钮宽度、黑底滑块的 translateX 与 width 共用同一条 --sp-snap / --t-snap 曲线，
- *    且滑块目标是“解析计算”出来的（前面所有未选中项的收起宽度之和 + 选中项展开宽度），
- *    而不是在过渡途中去测量 DOM。这里完全沿用该策略：先测量图标/标签/角标的固有宽度，
+ * 1) 按钮宽度与滑块的 translateX、width 共用 --sp-snap / --t-snap 曲线。
+ *    先测量图标、标签和角标的固有宽度，
  *    再算出每个按钮的显式像素宽度，让按钮、标签槽、滑块三者在同一曲线上同步收放，不会互相追赶抖动；
  * 2) 标签：取消选中 opacity .18s / blur .24s 立即淡出；选中时延迟 90ms 再以 .32s 去模糊浮现；
  *    标签槽宽度为真实文字宽度（非 max-width 估值），因此弹簧曲线不失真；
