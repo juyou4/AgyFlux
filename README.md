@@ -2,8 +2,6 @@
 
 面向 **Google Antigravity** 的多账号管理与额度监控桌面客户端，基于 React 19、TypeScript、Tauri 2 与 Rust 构建，并附带同源命令行工具 `agyflux`。
 
-> 项目由 Antigravity Switch 独立更名并重构交互设计；核心聚焦于本地账号调度与客户端切换，不包含也不会自动启用 API 网关监听端口。
-
 <!-- 图片注释 -->
 ![AgyFlux 概览（演示数据）](assets/screenshots/overview.png)
 
