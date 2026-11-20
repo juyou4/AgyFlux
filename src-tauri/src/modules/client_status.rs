@@ -32,14 +32,43 @@ fn resolve(accounts: &[Account], observation: Result<migration::CurrentIdentity,
         migration::CurrentIdentity::Credentials(state) => state.refresh_token.trim().is_empty(),
     };
     if empty { return (None, None, IdentitySource::Unavailable); }
-    let mut matches = accounts.iter().filter(|account| identity.matches(account));
-    let first = matches.next();
-    let matched = if matches.next().is_none() { first } else { None };
-    let id = matched.map(|account| account.id.clone());
+
     match identity {
-        migration::CurrentIdentity::AppEmail(email) => (id, Some(email), IdentitySource::RunningApp),
-        migration::CurrentIdentity::Credentials(_) =>
-            (id, matched.map(|account| account.email.clone()), IdentitySource::Credentials),
+        migration::CurrentIdentity::AppEmail(email) => {
+            let mut matches = accounts.iter().filter(|account| account.email.eq_ignore_ascii_case(&email));
+            let first = matches.next();
+            let matched = if matches.next().is_none() { first } else { None };
+            (matched.map(|account| account.id.clone()), Some(email), IdentitySource::RunningApp)
+        }
+        migration::CurrentIdentity::Credentials(state) => {
+            // 优先按 refresh_token 精确匹配；若客户端重新登录导致 token 轮换，则退回按凭据内解析出的邮箱唯一匹配。
+            let mut token_matches = accounts
+                .iter()
+                .filter(|account| account.token.refresh_token == state.refresh_token);
+            if let Some(first) = token_matches.next() {
+                return if token_matches.next().is_none() {
+                    (Some(first.id.clone()), Some(first.email.clone()), IdentitySource::Credentials)
+                } else {
+                    (None, state.email, IdentitySource::Credentials)
+                };
+            }
+
+            if let Some(observed_email) = state.email {
+                let mut email_matches = accounts
+                    .iter()
+                    .filter(|account| account.email.eq_ignore_ascii_case(&observed_email));
+                if let (Some(first), None) = (email_matches.next(), email_matches.next()) {
+                    return (
+                        Some(first.id.clone()),
+                        Some(first.email.clone()),
+                        IdentitySource::Credentials,
+                    );
+                }
+                return (None, Some(observed_email), IdentitySource::Credentials);
+            }
+
+            (None, None, IdentitySource::Credentials)
+        }
     }
 }
 
@@ -60,7 +89,7 @@ mod tests {
         let mut invalid = saved("invalid");
         invalid.token.refresh_token.clear();
         let observation = migration::CurrentIdentity::Credentials(migration::ImportedOAuthState {
-            refresh_token: String::new(), is_gcp_tos: false, project_id: None,
+            refresh_token: String::new(), is_gcp_tos: false, project_id: None, email: None,
         });
         assert_eq!(resolve(&[invalid], Ok(observation)), (None, None, IdentitySource::Unavailable));
     }
@@ -74,11 +103,36 @@ mod tests {
     #[test]
     fn stored_credentials_are_not_reported_as_a_running_session() {
         let identity = || migration::CurrentIdentity::Credentials(migration::ImportedOAuthState {
-            refresh_token: "fixture-refresh".into(), is_gcp_tos: false, project_id: None,
+            refresh_token: "fixture-refresh".into(), is_gcp_tos: false, project_id: None, email: None,
         });
         assert_eq!(resolve(&[saved("a")], Ok(identity())),
             (Some("a".into()), Some("a@example.invalid".into()), IdentitySource::Credentials));
         assert_eq!(resolve(&[saved("a"), saved("b")], Ok(identity())),
             (None, None, IdentitySource::Credentials));
+    }
+
+    #[test]
+    fn rotated_refresh_token_falls_back_to_unique_email_match_and_preserves_untracked_email() {
+        let rotated = migration::CurrentIdentity::Credentials(migration::ImportedOAuthState {
+            refresh_token: "fixture-refresh-rotated".into(),
+            is_gcp_tos: true,
+            project_id: None,
+            email: Some("A@EXAMPLE.INVALID".into()),
+        });
+        assert_eq!(
+            resolve(&[saved("a"), saved("b")], Ok(rotated)),
+            (Some("a".into()), Some("a@example.invalid".into()), IdentitySource::Credentials)
+        );
+
+        let untracked = migration::CurrentIdentity::Credentials(migration::ImportedOAuthState {
+            refresh_token: "fixture-refresh-new".into(),
+            is_gcp_tos: true,
+            project_id: None,
+            email: Some("new@example.invalid".into()),
+        });
+        assert_eq!(
+            resolve(&[saved("a")], Ok(untracked)),
+            (None, Some("new@example.invalid".into()), IdentitySource::Credentials)
+        );
     }
 }

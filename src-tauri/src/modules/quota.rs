@@ -23,8 +23,49 @@ const QUOTA_SUMMARY_ENDPOINTS: [&str; 3] = [
 #[derive(Debug, Serialize, Deserialize)]
 struct QuotaResponse {
     models: std::collections::HashMap<String, ModelInfo>,
+    #[serde(rename = "agentModelSorts")]
+    agent_model_sorts: Option<Vec<AgentModelSort>>,
+    #[serde(rename = "defaultAgentModelId")]
+    default_agent_model_id: Option<String>,
     #[serde(rename = "deprecatedModelIds")]
     deprecated_model_ids: Option<std::collections::HashMap<String, DeprecatedModelInfo>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AgentModelSort {
+    #[serde(default)]
+    groups: Vec<AgentModelGroup>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AgentModelGroup {
+    #[serde(default, rename = "modelIds")]
+    model_ids: Vec<String>,
+}
+
+impl QuotaResponse {
+    fn into_quota(mut self) -> QuotaData {
+        let mut quota = QuotaData::new();
+        // 只有对话菜单和默认对话模型能证明账号可选。工具、路由和实验也共用 models 字典。
+        let ids = match self.agent_model_sorts {
+            Some(sorts) => Some(sorts.into_iter().flat_map(|s| s.groups)
+                .flat_map(|g| g.model_ids).collect::<Vec<_>>()),
+            None => self.default_agent_model_id.filter(|id| !id.trim().is_empty()).map(|id| vec![id]),
+        };
+        quota.model_catalog_known = ids.is_some();
+        for (old_id, info) in self.deprecated_model_ids.unwrap_or_default() {
+            quota.model_forwarding_rules.insert(old_id, info.new_model_id);
+        }
+        for id in ids.unwrap_or_default() {
+            // 按菜单顺序取出，重复分组不会重复显示同一个模型。
+            if let Some(info) = self.models.remove(&id) {
+                if !info.disabled && info.is_internal != Some(true) && !quota.model_forwarding_rules.contains_key(&id) {
+                    quota.add_model(model_from_info(id, info));
+                }
+            }
+        }
+        quota
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -35,6 +76,10 @@ struct DeprecatedModelInfo {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ModelInfo {
+    #[serde(default)]
+    disabled: bool,
+    #[serde(rename = "isInternal")]
+    is_internal: Option<bool>,
     #[serde(rename = "quotaInfo")]
     quota_info: Option<QuotaInfo>,
     #[serde(rename = "displayName")]
@@ -343,26 +388,8 @@ pub async fn fetch_quota_with_cache(
                     let quota_response: QuotaResponse =
                         response.json().await.map_err(AppError::from)?;
 
-                    let mut quota_data = QuotaData::new();
-
-                    // Use debug level for detailed info to avoid console noise
                     tracing::debug!("Quota API returned {} models", quota_response.models.len());
-
-                    for (name, info) in quota_response.models {
-                        if let Some(model) = model_from_info(name, info) {
-                            quota_data.add_model(model);
-                        }
-                    }
-
-                    // Parse deprecated model routing rules
-                    if let Some(deprecated) = quota_response.deprecated_model_ids {
-                        for (old_id, info) in deprecated {
-                            // Register forwarding rules (including those mapping to gemini-pro-agent)
-                            quota_data
-                                .model_forwarding_rules
-                                .insert(old_id, info.new_model_id);
-                        }
-                    }
+                    let mut quota_data = quota_response.into_quota();
 
                     // Set subscription tier
                     quota_data.subscription_tier = subscription_tier.clone();
@@ -400,10 +427,7 @@ pub async fn fetch_quota_with_cache(
     }))
 }
 
-fn model_from_info(name: String, info: ModelInfo) -> Option<crate::models::quota::ModelQuota> {
-    if !["gemini", "claude", "gpt", "image", "imagen"].iter().any(|prefix| name.starts_with(prefix)) {
-        return None;
-    }
+fn model_from_info(name: String, info: ModelInfo) -> crate::models::quota::ModelQuota {
     let observation = info.quota_info;
     let fraction = observation.as_ref().and_then(|q| q.remaining_fraction)
         .filter(|f| crate::models::quota::fraction_is_known(Some(*f)));
@@ -411,7 +435,7 @@ fn model_from_info(name: String, info: ModelInfo) -> Option<crate::models::quota
         remaining_fraction: fraction,
         reset_time: observation.as_ref().and_then(|q| q.reset_time.clone()).unwrap_or_default(),
     });
-    Some(crate::models::quota::ModelQuota {
+    crate::models::quota::ModelQuota {
         name, percentage: fraction.map(|f| (f * 100.0).round() as i32).unwrap_or(0),
         percentage_known: Some(fraction.is_some()), observed_remaining_fraction: fraction,
         primary_quota,
@@ -421,7 +445,7 @@ fn model_from_info(name: String, info: ModelInfo) -> Option<crate::models::quota
         supports_thinking: info.supports_thinking, thinking_budget: info.thinking_budget,
         recommended: info.recommended, max_tokens: info.max_tokens,
         max_output_tokens: info.max_output_tokens, supported_mime_types: info.supported_mime_types,
-    })
+    }
 }
 
 /// Fetch grouped quota summary (weekly + 5h windows) via retrieveUserQuotaSummary.
@@ -881,6 +905,47 @@ pub async fn warm_up_all_accounts() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn agent_menu_controls_membership_and_order_for_each_account() {
+        let catalog = json!({
+            "models": {
+                "gemini-4-neon-high": {"displayName":"Gemini 4 Neon (High)"},
+                "gemini-4-hydrogen-sonar": {"recommended":true},
+                "gemini-3.1-flash-lite": {"quotaInfo":{"remainingFraction":0.47}},
+                "new-agent": {}, "hidden": {"isInternal":true}, "old": {},
+                "gemini-4-carbon-disabled": {"displayName":"Gemini 4 Carbon","disabled":true},
+                "gemini-4-carbon-high": {"displayName":"Gemini 4 Carbon (High)"}
+            },
+            "tieredModelIds":{"flashLite":["gemini-3.1-flash-lite"]},
+            "deprecatedModelIds":{"old":{"newModelId":"new-agent"}},
+            "agentModelSorts":[{"groups":[{"modelIds":["new-agent","hidden","gemini-4-carbon-disabled","old"]},
+                                         {"modelIds":["gemini-4-neon-high","new-agent","absent"]}]}]
+        });
+        let quota = serde_json::from_value::<QuotaResponse>(catalog.clone()).unwrap().into_quota();
+        assert!(quota.model_catalog_known);
+        assert_eq!(quota.models.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(),
+                   ["new-agent", "gemini-4-neon-high"]);
+        assert_eq!(quota.models[0].percentage_known, Some(false));
+        let mut other = catalog;
+        other["agentModelSorts"] = json!([{"groups":[{"modelIds":["gemini-4-carbon-high", "gemini-3.1-flash-lite"]}]}]);
+        let quota = serde_json::from_value::<QuotaResponse>(other).unwrap().into_quota();
+        assert_eq!(quota.models.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(),
+                   ["gemini-4-carbon-high", "gemini-3.1-flash-lite"]);
+    }
+
+    #[test]
+    fn absent_menu_uses_only_explicit_default_and_empty_menu_stays_empty() {
+        let mut response = json!({"models":{"default":{}, "gemini-4-hydrogen-sonar":{}}});
+        let parse = |v| serde_json::from_value::<QuotaResponse>(v).unwrap().into_quota();
+        assert!(!parse(response.clone()).model_catalog_known);
+        assert!(parse(response.clone()).models.is_empty());
+        response["defaultAgentModelId"] = json!("default");
+        assert_eq!(parse(response.clone()).models[0].name, "default");
+        response["agentModelSorts"] = json!([]);
+        let empty = parse(response);
+        assert!(empty.model_catalog_known && empty.models.is_empty());
+    }
+
     #[tokio::test]
     async fn repair_warmup_entries_share_one_lock_before_io() {
         let _job = WARMUP_LOCK.lock().await;
@@ -922,7 +987,7 @@ mod tests {
     fn effective_weekly_fusion_preserves_primary_model_observation_for_window_display() {
         let mut model = model_from_info("gemini-test".into(), serde_json::from_value(json!({
             "quotaInfo":{"remainingFraction":0.12,"resetTime":"2030-01-01T02:00:00Z"}
-        })).unwrap()).unwrap();
+        })).unwrap());
         let groups = serde_json::from_value::<Vec<crate::models::quota::QuotaGroup>>(json!([
             {"display_name":"Gemini Models","buckets":[
                 {"bucket_id":"gemini-5h","window":"5h","remaining_fraction":0.8,"remaining_fraction_known":true,"reset_time":"2030-01-01T04:00:00Z"},
@@ -1053,13 +1118,13 @@ mod tests {
     #[test]
     fn catalog_models_without_quota_info_remain_selectable_but_unknown() {
         let info: ModelInfo = serde_json::from_value(json!({"displayName":"Gemini 4 Argon"})).unwrap();
-        let model = model_from_info("gemini-4-argon".into(), info).unwrap();
+        let model = model_from_info("gemini-4-argon".into(), info);
         assert_eq!(model.percentage_known, Some(false));
         assert_eq!(model.observed_remaining_fraction, None);
         assert_eq!(model.display_name.as_deref(), Some("Gemini 4 Argon"));
 
         let disabled_info: ModelInfo = serde_json::from_value(json!({"displayName":"Gemini 4 Hydrogen"})).unwrap();
-        let mut disabled_model = model_from_info("gemini-4-hydrogen-disabled".into(), disabled_info).unwrap();
+        let mut disabled_model = model_from_info("gemini-4-hydrogen-disabled".into(), disabled_info);
         let groups: Vec<crate::models::quota::QuotaGroup> = serde_json::from_value(json!([
             {"display_name":"Gemini Models","buckets":[
                 {"bucket_id":"gemini-5h","window":"5h","remaining_fraction":1.0,"remaining_fraction_known":true,"reset_time":"2030-01-01T02:00:00Z"},
@@ -1108,7 +1173,7 @@ mod tests {
     fn shared_summary_cannot_increase_a_lower_model_observation() {
         let mut model = model_from_info("gemini-test".into(), serde_json::from_value(json!({
             "quotaInfo":{"remainingFraction":0.12,"resetTime":"2030-01-01T00:00:00Z"}
-        })).unwrap()).unwrap();
+        })).unwrap());
         let groups = serde_json::from_value::<Vec<crate::models::quota::QuotaGroup>>(json!([
             {"display_name":"Gemini","buckets":[{"bucket_id":"gemini-5h","window":"5h","remaining_fraction":1.0,"remaining_fraction_known":true,"reset_time":"2030-01-07T00:00:00Z"}]}
         ])).unwrap();

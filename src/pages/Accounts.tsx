@@ -69,7 +69,7 @@ import {
   type AccountQuotaValuation,
   type QuotaValuationResponse,
 } from '../utils/quotaValuation';
-import { effectiveModelQuota, modelQuotaForWindow } from '../utils/menuBarQuota';
+import { accountModelQuotaRows } from '../utils/menuBarQuota';
 import { formatCurrencyCompact, type CurrencyMode } from '../utils/currency';
 import { copyToClipboard } from '../utils/clipboard';
 import { isTauri } from '../utils/env';
@@ -176,6 +176,7 @@ function AccountDetailsDrawer({
   poolWindow,
   zh,
   compact = false,
+  onRefresh,
   onDelete,
   onOpenFingerprint,
   onSaveLabel,
@@ -195,8 +196,7 @@ function AccountDetailsDrawer({
     setProjectDraft(account.token.project_id ?? '');
   }, [account.id, account.custom_label, account.priority, account.token.project_id]);
 
-  const models = account.quota?.models || [];
-  const protectedSet = useMemo(() => new Set(account.protected_models || []), [account.protected_models]);
+  const models = useMemo(() => accountModelQuotaRows(account, poolWindow), [account, poolWindow]);
 
   const handleAutoProject = async () => {
     setFetchingProject(true);
@@ -235,16 +235,18 @@ function AccountDetailsDrawer({
       {drawerTab === 'models' ? (
         <div key="models" className="mk-capsule-switch">
           {models.length === 0 ? (
-            <div className="rounded-[16px] bg-[var(--bg-card)] px-3.5 py-3 text-xs text-[var(--ink-muted)]">
-              {zh ? '暂无模型配额数据，点击右上菜单可刷新。' : 'No model quota data yet.'}
+            <div className="flex items-center justify-between gap-3 rounded-[16px] bg-[var(--bg-card)] px-3.5 py-3 text-xs text-[var(--ink-muted)]">
+              <span>{account.quota?.model_catalog_known
+                ? (zh ? '当前账号未返回可选模型。' : 'No selectable models were returned for this account.')
+                : (zh ? '刷新配额以获取此账号的可选模型。' : 'Refresh quota to load the models available to this account.')}</span>
+              <MorphActionButton variant="ghost" size="sm" onClick={() => onRefresh(account.id)}
+                idleLabel={zh ? '刷新配额' : 'Refresh quota'} loadingLabel={zh ? '刷新中' : 'Refreshing'}
+                successLabel={zh ? '已刷新' : 'Refreshed'} />
             </div>
           ) : (
             <div className={compact ? 'space-y-1.5' : 'grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3'}>
-              {models.map((m, modelIdx) => {
-                const win = modelQuotaForWindow(m, account.quota, poolWindow);
-                const eff = effectiveModelQuota(m, account.quota);
-                const pct = win.percentage ?? eff.percentage;
-                const isProtected = protectedSet.has(m.name);
+              {models.map((row, modelIdx) => {
+                const pct = row.percentage;
                 const clamped = Math.max(0, Math.min(100, Math.round(pct ?? 0)));
                 const barColor =
                   pct === null
@@ -256,20 +258,22 @@ function AccountDetailsDrawer({
                         : 'bg-[var(--rose)]';
                 return (
                   <div
-                    key={m.name}
+                    key={row.id}
                     className="flex items-center justify-between gap-2.5 rounded-[16px] bg-[var(--bg-card)] px-3.5 py-2"
                   >
                     <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                      <span className="truncate text-xs font-medium text-[var(--ink)]">
-                        {m.display_name || m.name}
-                      </span>
-                      {isProtected && (
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-medium text-[var(--ink)]">{row.label}</div>
+                        {row.levels.length > 1 && <div className="text-[10px] text-[var(--ink-muted)]">{row.levels.join(' · ')}</div>}
+                      </div>
+                      {row.protected && (
                         <ShieldWarning size={12} className="shrink-0 text-[var(--amber)]" weight="fill" />
                       )}
                     </div>
                     <div className="flex shrink-0 items-center gap-2.5">
                       <span className="font-mono text-[10px] tabular-nums text-[var(--ink-muted)]">
-                        {win.resetTime ? formatShortCountdown(win.resetTime) : '--'}
+                        {row.window !== poolWindow && (zh ? '周额度 · ' : 'Weekly · ')}
+                        {row.resetTime ? formatShortCountdown(row.resetTime) : '--'}
                       </span>
                       <SpringMeter
                         value={pct === null ? null : clamped}
@@ -407,7 +411,6 @@ export default function Accounts() {
     hasLoadedAccounts,
     error,
     fetchAccounts,
-    fetchActiveClients,
     switchAccount,
     refreshQuota,
     refreshAllQuotas,
@@ -451,9 +454,8 @@ export default function Accounts() {
 
   useEffect(() => {
     void fetchAccounts();
-    void fetchActiveClients();
     void loadValuations();
-  }, [fetchAccounts, fetchActiveClients, loadValuations]);
+  }, [fetchAccounts, loadValuations]);
 
   const expiringMap = useMemo(() => {
     const map = new Map<string, { label: string; hoursLeft: number; remaining: number }>();
@@ -564,8 +566,8 @@ export default function Accounts() {
     switchingRef.current = true;
     setSwitchingId(acc.id);
     try {
-      await switchAccount(acc.id, switchTarget);
-      await fetchActiveClients();
+      const target = switchTarget === 'classic' ? 'app' : switchTarget;
+      await switchAccount(acc.id, target);
       showToast(
         zh ? `已切换 ${acc.custom_label || acc.email}` : `Switched to ${acc.custom_label || acc.email}`,
         'success'
@@ -758,12 +760,13 @@ export default function Accounts() {
     let ok = 0;
     for (const id of ids) {
       try {
-        await warmUpAccount(id);
+        await accountService.warmUpAccount(id);
         ok += 1;
       } catch {
         // continue remaining accounts
       }
     }
+    await fetchAccounts(true);
     showToast(
       zh ? `批量预热完成：${ok}/${ids.length}` : `Batch warmup finished: ${ok}/${ids.length}`,
       ok === ids.length ? 'success' : 'info'

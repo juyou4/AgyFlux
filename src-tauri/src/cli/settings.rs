@@ -159,7 +159,7 @@ mod tests {
     }
     #[test]
     fn update_result_is_check_only_and_keeps_languages_separate() {
-        let info = crate::modules::updater::UpdateInfo { enabled: true, current_version: "4.8.1".into(), latest_version: "v4.8.2".into(), has_update: true, release_url: "https://github.com/anglee0323/agy-switch/releases/tag/v4.8.2".into() };
+        let info = crate::modules::updater::UpdateInfo { enabled: true, current_version: "1.0.0".into(), latest_version: "v1.0.1".into(), has_update: true, release_url: "https://github.com/juyou4/AgyFlux/releases/tag/v1.0.1".into() };
         assert!(update_output(&info, false, Lang::En).contains("Update available"));
         assert!(update_output(&info, false, Lang::Zh).contains("有新版本"));
         assert_eq!(serde_json::from_str::<serde_json::Value>(&update_output(&info, true, Lang::En)).unwrap()["check_only"], true);

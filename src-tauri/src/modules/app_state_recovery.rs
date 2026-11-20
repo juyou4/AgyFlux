@@ -44,18 +44,27 @@ fn rename_open_file(file: &File, destination: &Path) -> io::Result<()> {
         .len()
         .checked_mul(2)
         .ok_or_else(|| io::Error::other("Backup path too long"))?;
-    let size = std::mem::offset_of!(FILE_RENAME_INFO, FileName)
+    let file_name_offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+    // Win32 FILE_RENAME_INFO 要求缓冲区包含结尾 UTF-16 NUL，避免路径长度刚好对齐时越界读取。
+    let size = file_name_offset
         .checked_add(name_bytes)
+        .and_then(|n| n.checked_add(2))
         .ok_or_else(|| io::Error::other("Backup path too long"))?;
     let size_u32 = u32::try_from(size).map_err(|_| io::Error::other("Backup path too long"))?;
     let mut storage = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
-    let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    let base = storage.as_mut_ptr().cast::<u8>();
+    let info = base.cast::<FILE_RENAME_INFO>();
     unsafe {
-        (*info).Anonymous.ReplaceIfExists = false;
-        (*info).RootDirectory = std::ptr::null_mut();
-        (*info).FileNameLength = name_bytes as u32;
-        std::ptr::copy_nonoverlapping(name.as_ptr(), (*info).FileName.as_mut_ptr(), name.len());
-        if SetFileInformationByHandle(file.as_raw_handle(), FileRenameInfo, info.cast(), size_u32)
+        std::ptr::addr_of_mut!((*info).Anonymous.Flags).write(0);
+        std::ptr::addr_of_mut!((*info).RootDirectory).write(std::ptr::null_mut());
+        std::ptr::addr_of_mut!((*info).FileNameLength).write(name_bytes as u32);
+        std::ptr::copy_nonoverlapping(
+            name.as_ptr(),
+            base.add(file_name_offset).cast::<u16>(),
+            name.len(),
+        );
+        base.add(file_name_offset + name_bytes).cast::<u16>().write(0);
+        if SetFileInformationByHandle(file.as_raw_handle(), FileRenameInfo, base.cast(), size_u32)
             == 0
         {
             return Err(io::Error::last_os_error());

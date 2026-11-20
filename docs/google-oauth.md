@@ -10,7 +10,16 @@
 
 ## 配置 OAuth 客户端
 
-从源码构建的程序需要具备相应权限的 Google 桌面 OAuth 客户端。启动程序前，在当前终端设置客户端。
+AgyFlux 需要具备相应权限的 Google 桌面 OAuth 客户端。在「设置 → 桌面与数据」打开数据目录，保存以下内容为 `google-oauth.json`，保存后无需重启即可立即生效。
+
+```json
+{
+  "client_id": "<客户端 ID>",
+  "client_secret": "<客户端密钥>"
+}
+```
+
+请在本机保管此文件。也可在启动程序前通过终端提供客户端配置。
 
 ```powershell
 $env:ANTIGRAVITY_OAUTH_CLIENTS = 'desktop|<客户端 ID>|<客户端密钥>|Google Desktop'

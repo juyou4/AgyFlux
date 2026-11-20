@@ -33,6 +33,10 @@ export async function getDesktopSettings(): Promise<DesktopStatus> {
     return await invoke<DesktopStatus>('get_desktop_settings');
 }
 
+export function launchAntigravityWithProxy(): Promise<void> {
+    return invoke('launch_antigravity_with_proxy');
+}
+
 export async function setDesktopPreferences(patch: Partial<DesktopPreferences>): Promise<DesktopStatus> {
     return await invoke<DesktopStatus>('set_desktop_preferences', { patch });
 }

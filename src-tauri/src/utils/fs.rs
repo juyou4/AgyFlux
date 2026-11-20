@@ -34,16 +34,39 @@ fn atomic_replace_file(src: &Path, dst: &Path) -> Result<(), String> {
     // MOVEFILE_WRITE_THROUGH = 0x8
     const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
     const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
     let flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
 
-    let result = unsafe { MoveFileExW(src_wide.as_ptr(), dst_wide.as_ptr(), flags) };
-    if result == 0 {
+    // Windows 下并发读（如列表加载、托盘刷新或杀毒扫描）会短暂占用目标句柄，
+    // 对瞬时拒绝访问/共享冲突做短退避重试，避免偶发写入失败。
+    let backoffs_ms = [15u64, 30, 60, 100, 150];
+    let mut last_err = None;
+    for attempt in 0..=backoffs_ms.len() {
+        let result = unsafe { MoveFileExW(src_wide.as_ptr(), dst_wide.as_ptr(), flags) };
+        if result != 0 {
+            return Ok(());
+        }
         let err = std::io::Error::last_os_error();
-        let _ = std::fs::remove_file(src);
-        return Err(format!("MoveFileExW failed: {}", err));
+        let retryable = matches!(
+            err.raw_os_error(),
+            Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION)
+        );
+        last_err = Some(err);
+        if retryable && attempt < backoffs_ms.len() {
+            std::thread::sleep(std::time::Duration::from_millis(backoffs_ms[attempt]));
+            continue;
+        }
+        break;
     }
 
-    Ok(())
+    let _ = std::fs::remove_file(src);
+    Err(format!(
+        "MoveFileExW failed: {}",
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown error".to_string())
+    ))
 }
 
 /// Non-Windows: use standard atomic rename

@@ -11,6 +11,38 @@ pub struct ImportedOAuthState {
     pub refresh_token: String,
     pub is_gcp_tos: bool,
     pub project_id: Option<String>,
+    pub email: Option<String>,
+}
+
+pub(crate) fn valid_email(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.len() <= 254
+        && trimmed.is_ascii()
+        && !trimmed
+            .bytes()
+            .any(|b| b.is_ascii_control() || b.is_ascii_whitespace())
+        && trimmed
+            .split_once('@')
+            .is_some_and(|(name, domain)| !name.is_empty() && !domain.is_empty() && !domain.contains('@'))
+    {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+/// 从 OAuth id_token (JWT) 的 payload 段解析邮箱，无需网络请求。
+pub(crate) fn extract_email_from_jwt(id_token: &str) -> Option<String> {
+    let payload_b64 = id_token.split('.').nth(1)?;
+    let decoded = general_purpose::URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .or_else(|_| general_purpose::URL_SAFE.decode(payload_b64))
+        .ok()?;
+    let claims: Value = serde_json::from_slice(&decoded).ok()?;
+    claims
+        .get("email")
+        .and_then(Value::as_str)
+        .and_then(valid_email)
 }
 
 pub(crate) enum CurrentIdentity {
@@ -148,7 +180,12 @@ fn discover_v1_sources(dir: &std::path::Path) -> Vec<(String, Result<ImportedOAu
                     let bytes = general_purpose::STANDARD.decode(encoded).map_err(|_| "invalid_backup")?;
                     let oauth = protobuf::find_field(&bytes, 6)?.ok_or("missing_credentials")?;
                     let token = String::from_utf8(protobuf::find_field(&oauth, 3)?.ok_or("missing_credentials")?).map_err(|_| "invalid_backup")?;
-                    Ok(ImportedOAuthState { refresh_token: token, is_gcp_tos: true, project_id: None })
+                    let email = protobuf::find_field(&oauth, 5)
+                        .ok()
+                        .flatten()
+                        .and_then(|bytes| String::from_utf8(bytes).ok())
+                        .and_then(|jwt| extract_email_from_jwt(&jwt));
+                    Ok(ImportedOAuthState { refresh_token: token, is_gcp_tos: true, project_id: None, email })
                 });
                 sources.push(("Legacy account backup".into(), state));
             }
@@ -187,14 +224,62 @@ where F: FnMut(ImportedOAuthState) -> Fut, Fut: std::future::Future<Output = Res
     report
 }
 
-async fn validate_local_state(state: ImportedOAuthState) -> Result<Account, String> {
+async fn verify_local_state(state: &ImportedOAuthState) -> Result<(crate::modules::oauth::UserInfo, TokenData), String> {
     let response = crate::modules::oauth::refresh_access_token(&state.refresh_token, None).await?;
     let user = crate::modules::oauth::get_user_info(&response.access_token).await?;
     if user.email.trim().is_empty() { return Err("Account identity unavailable.".into()); }
-    let token = TokenData::new(response.access_token, state.refresh_token, response.expires_in,
-        Some(user.email.clone()), state.project_id, None, state.is_gcp_tos, response.id_token)
+    let token = TokenData::new(response.access_token, state.refresh_token.clone(), response.expires_in,
+        Some(user.email.clone()), state.project_id.clone(), None, state.is_gcp_tos, response.id_token)
         .with_oauth_client_key(response.oauth_client_key);
+    Ok((user, token))
+}
+
+async fn validate_local_state(state: ImportedOAuthState) -> Result<Account, String> {
+    let (user, token) = verify_local_state(&state).await?;
     account::upsert_account(user.email, user.name, token)
+}
+
+async fn observe_app_sign_in() -> Result<CurrentIdentity, &'static str> {
+    tokio::task::spawn_blocking(|| get_current_identity(Some("app")))
+        .await
+        .map_err(|_| "app_sign_in_unavailable")?
+        .map_err(|_| "app_sign_in_unavailable")
+}
+
+pub(crate) async fn reconcile_app_sign_in() -> Result<(), String> {
+    let identity = observe_app_sign_in().await?;
+    let CurrentIdentity::Credentials(state) = &identity else {
+        return Err("app_sign_in_changed".into());
+    };
+    if state.refresh_token.trim().is_empty() {
+        return Err("app_sign_in_unavailable".into());
+    }
+    let matches = account::list_accounts()
+        .map_err(|_| "app_sign_in_sync_failed")?
+        .iter()
+        .filter(|account| identity.matches(account))
+        .take(2)
+        .count();
+    match matches {
+        1 => return Ok(()),
+        2 => return Err("app_sign_in_ambiguous".into()),
+        _ => {}
+    }
+    if crate::modules::oauth::list_oauth_clients().map_or(true, |clients| clients.is_empty()) {
+        return Err("app_sign_in_oauth_unavailable".into());
+    }
+    let (user, token) = verify_local_state(state)
+        .await
+        .map_err(|_| "app_sign_in_sync_failed")?;
+    // 用户可能在 Google 返回前通过 Antigravity 更换登录。
+    if !matches!(observe_app_sign_in().await?, CurrentIdentity::Credentials(current)
+        if current.refresh_token == state.refresh_token)
+    {
+        return Err("app_sign_in_changed".into());
+    }
+    account::upsert_account(user.email, user.name, token)
+        .map_err(|_| "app_sign_in_sync_failed".to_string())?;
+    Ok(())
 }
 
 /// Each client is discovered independently; one failed source cannot hide another.
@@ -217,14 +302,29 @@ pub(crate) async fn import_observed_oauth_state(
     state: ImportedOAuthState,
 ) -> Result<Account, String> {
     use crate::modules::oauth;
+    let saved_accounts = account::list_accounts()?;
     let identity = CurrentIdentity::Credentials(state.clone());
-    if let Some(account) = account::list_accounts()?
-        .into_iter()
+    if let Some(account) = saved_accounts
+        .iter()
         .find(|account| identity.matches(account))
     {
-        return Ok(account);
+        return Ok(account.clone());
     }
-    let response = oauth::refresh_access_token(&state.refresh_token, None).await?;
+    let response = match oauth::refresh_access_token(&state.refresh_token, None).await {
+        Ok(resp) => resp,
+        Err(err) => {
+            // 离线或未配置本地 OAuth 客户端时，若凭据内含邮箱且唯一命中已保存账号，则安全复用该账号避免状态丢失。
+            if let Some(email) = state.email.as_deref() {
+                let mut matches = saved_accounts
+                    .into_iter()
+                    .filter(|account| account.email.eq_ignore_ascii_case(email));
+                if let (Some(matched), None) = (matches.next(), matches.next()) {
+                    return Ok(matched);
+                }
+            }
+            return Err(err);
+        }
+    };
     let user = oauth::get_user_info(&response.access_token).await?;
     let token = TokenData::new(
         response.access_token,
@@ -255,10 +355,9 @@ fn extract_enterprise_project_id_from_conn(
         return Ok(None);
     };
 
-    let (sentinel_key, payload) = protobuf::decode_unified_state_entry(&entry_b64)?;
-    if sentinel_key != "enterpriseGcpProjectId" {
+    let Some(payload) = protobuf::find_unified_state_entry(&entry_b64, "enterpriseGcpProjectId")? else {
         return Ok(None);
-    }
+    };
 
     let Some(project_bytes) = protobuf::find_field(&payload, 3)? else {
         return Ok(None);
@@ -273,6 +372,29 @@ fn extract_enterprise_project_id_from_conn(
     }
 }
 
+fn extract_user_status_email_from_conn(conn: &rusqlite::Connection) -> Option<String> {
+    let entry_b64: String = conn
+        .query_row(
+            "SELECT value FROM ItemTable WHERE key = ?",
+            ["antigravityUnifiedStateSync.userStatus"],
+            |row| row.get(0),
+        )
+        .ok()?;
+    let payload = protobuf::find_unified_state_entry(&entry_b64, "userStatusSentinelKey")
+        .ok()
+        .flatten()?;
+    for field_num in [7, 3] {
+        if let Ok(Some(bytes)) = protobuf::find_field(&payload, field_num) {
+            if let Ok(text) = String::from_utf8(bytes) {
+                if let Some(email) = valid_email(&text) {
+                    return Some(email);
+                }
+            }
+        }
+    }
+    None
+}
+
 pub(crate) fn extract_oauth_state_from_file(db_path: &PathBuf) -> Result<ImportedOAuthState, String> {
     use base64::{engine::general_purpose, Engine as _};
 
@@ -280,13 +402,14 @@ pub(crate) fn extract_oauth_state_from_file(db_path: &PathBuf) -> Result<Importe
         return Err(format!("Database file not found: {:?}", db_path));
     }
 
-    // Connect to database
+    // Connect to database (read-only) with busy timeout to tolerate concurrent client writes
     let conn = rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("Failed to open database: {}", e))?;
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
 
     // 1. 尝试新版格式 (>= 1.16.5)
     // 键: antigravityUnifiedStateSync.oauthToken
-    // 结构: Outer(F1) -> Inner(F2) -> Inner2(F1) -> Base64 -> OAuthInfo
+    // 结构: Topic(repeated F1 DataEntry) -> Entry(key="oauthTokenInfoSentinelKey", F2 Row) -> Base64 -> OAuthInfo
     let new_format_data: Option<String> = conn
         .query_row(
             "SELECT value FROM ItemTable WHERE key = ?",
@@ -300,10 +423,9 @@ pub(crate) fn extract_oauth_state_from_file(db_path: &PathBuf) -> Result<Importe
             "Detected new format database (antigravityUnifiedStateSync.oauthToken)",
         );
         let parsed = (|| -> Result<ImportedOAuthState, String> {
-            let (sentinel_key, oauth_info_blob) = protobuf::decode_unified_state_entry(&outer_b64)?;
-            if sentinel_key != "oauthTokenInfoSentinelKey" {
-                return Err("Unexpected OAuth sentinel key.".into());
-            }
+            let oauth_info_blob =
+                protobuf::find_unified_state_entry(&outer_b64, "oauthTokenInfoSentinelKey")?
+                    .ok_or("OAuth sentinel entry not found.")?;
 
             // 解析 OAuthInfo (Field 3) -> Refresh Token
             let refresh_bytes = protobuf::find_field(&oauth_info_blob, 3)
@@ -312,6 +434,12 @@ pub(crate) fn extract_oauth_state_from_file(db_path: &PathBuf) -> Result<Importe
 
             let refresh_token = String::from_utf8(refresh_bytes)
                 .map_err(|_| "Refresh Token is not UTF-8 encoded".to_string())?;
+            let id_token_email = protobuf::find_field(&oauth_info_blob, 5)
+                .ok()
+                .flatten()
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .and_then(|jwt| extract_email_from_jwt(&jwt));
+            let email = id_token_email.or_else(|| extract_user_status_email_from_conn(&conn));
             let is_gcp_tos = protobuf::find_varint_field(&oauth_info_blob, 6)?.unwrap_or(1) != 0;
             let project_id = extract_enterprise_project_id_from_conn(&conn)?;
 
@@ -319,6 +447,7 @@ pub(crate) fn extract_oauth_state_from_file(db_path: &PathBuf) -> Result<Importe
                 refresh_token,
                 is_gcp_tos,
                 project_id,
+                email,
             })
         })();
         if let Ok(state) = parsed { return Ok(state); }
@@ -353,11 +482,18 @@ pub(crate) fn extract_oauth_state_from_file(db_path: &PathBuf) -> Result<Importe
 
     let refresh_token = String::from_utf8(refresh_bytes)
         .map_err(|_| "Refresh Token is not UTF-8 encoded".to_string())?;
+    let email = protobuf::find_field(&oauth_data, 5)
+        .ok()
+        .flatten()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .and_then(|jwt| extract_email_from_jwt(&jwt))
+        .or_else(|| extract_user_status_email_from_conn(&conn));
 
     Ok(ImportedOAuthState {
         refresh_token,
         is_gcp_tos: true,
         project_id: extract_enterprise_project_id_from_conn(&conn)?,
+        email,
     })
 }
 
@@ -423,7 +559,7 @@ mod current_identity_tests {
     fn credential_sync_selects_the_exact_observation_not_scan_order() {
         let accounts = [fixture("first", "first@example.test"), fixture("second", "second@example.test")];
         let observed = resolve_current_identity(|| Ok(None), || Ok(ImportedOAuthState {
-            refresh_token: "fixture-refresh-second".into(), is_gcp_tos: false, project_id: None,
+            refresh_token: "fixture-refresh-second".into(), is_gcp_tos: false, project_id: None, email: None,
         })).unwrap();
         assert_eq!(accounts.iter().find(|a| observed.matches(a)).unwrap().id, "second");
         let unknown = CurrentIdentity::AppEmail("unknown@example.test".into());
@@ -446,7 +582,7 @@ mod import_report_tests {
 
     #[tokio::test]
     async fn partial_failure_is_reported_and_does_not_hide_another_client_or_retry() {
-        let state = |token: &str| Ok(ImportedOAuthState { refresh_token: token.into(), is_gcp_tos: false, project_id: None });
+        let state = |token: &str| Ok(ImportedOAuthState { refresh_token: token.into(), is_gcp_tos: false, project_id: None, email: None });
         let mut attempts = 0;
         let report = import_discovered_sources(vec![
             ("App".into(), state("fixture-A")), ("CLI".into(), state("fixture-A")),
@@ -480,5 +616,25 @@ mod import_report_tests {
         let original = fs::read(&path).unwrap();
         assert_eq!(extract_oauth_state_from_file(&path).unwrap().refresh_token, "fixture-refresh");
         assert_eq!(fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn extract_oauth_state_handles_multi_entry_topic_and_extracts_email() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("state.vscdb");
+        let jwt_payload = general_purpose::URL_SAFE_NO_PAD.encode(r#"{"email":"Alice@Example.Test"}"#);
+        let id_token = format!("eyJhbGciOiJSUzI1NiJ9.{jwt_payload}.sig");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)", []).unwrap();
+            let oauth = protobuf::create_oauth_info("fixture-access", "fixture-refresh", 123, true, Some(&id_token), None);
+            let mut topic = protobuf::create_unified_topic_entry("unrelatedSentinelKey", b"ignored");
+            topic.extend(protobuf::create_unified_topic_entry("oauthTokenInfoSentinelKey", &oauth));
+            let topic_b64 = general_purpose::STANDARD.encode(&topic);
+            conn.execute("INSERT INTO ItemTable VALUES (?1, ?2)", ["antigravityUnifiedStateSync.oauthToken", &topic_b64]).unwrap();
+        }
+        let state = extract_oauth_state_from_file(&path).unwrap();
+        assert_eq!(state.refresh_token, "fixture-refresh");
+        assert_eq!(state.email.as_deref(), Some("Alice@Example.Test"));
     }
 }

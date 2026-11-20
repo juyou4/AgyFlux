@@ -73,11 +73,11 @@ pub async fn add_account(
 
     let account = service.add_account(&refresh_token).await?;
     crate::modules::tray::update_tray_menus(&app);
+    let _ = app.emit("menubar://data-updated", ());
 
     Ok(account.into())
 }
 
-/// 删除账号
 /// 删除账号
 #[tauri::command]
 pub async fn delete_account(app: tauri::AppHandle, account_id: String) -> Result<(), String> {
@@ -85,6 +85,7 @@ pub async fn delete_account(app: tauri::AppHandle, account_id: String) -> Result
         crate::modules::integration::SystemManager::new(app.clone()),
     );
     service.delete_account(&account_id)?;
+    let _ = app.emit("menubar://data-updated", ());
 
     Ok(())
 }
@@ -104,8 +105,9 @@ pub async fn delete_accounts(
         e
     })?;
 
-    // 强制同步托盘
+    // 强制同步托盘与快捷面板
     crate::modules::tray::update_tray_menus(&app);
+    let _ = app.emit("menubar://data-updated", ());
 
     Ok(())
 }
@@ -113,7 +115,7 @@ pub async fn delete_accounts(
 /// 重新排序账号列表
 /// 根据传入的账号ID数组顺序更新账号排列
 #[tauri::command]
-pub async fn reorder_accounts(account_ids: Vec<String>) -> Result<(), String> {
+pub async fn reorder_accounts(app: tauri::AppHandle, account_ids: Vec<String>) -> Result<(), String> {
     modules::logger::log_info(&format!(
         "收到账号重排序请求，共 {} 个账号",
         account_ids.len()
@@ -122,6 +124,7 @@ pub async fn reorder_accounts(account_ids: Vec<String>) -> Result<(), String> {
         modules::logger::log_error(&format!("账号重排序失败: {}", e));
         e
     })?;
+    let _ = app.emit("menubar://data-updated", ());
 
     Ok(())
 }
@@ -141,8 +144,10 @@ pub async fn switch_account(
         .switch_account(&account_id, target_ide.as_deref())
         .await?;
 
-    // 同步托盘
+    // 同步托盘并通知快捷面板与主窗口刷新当前生效账号
     crate::modules::tray::update_tray_menus(&app);
+    let _ = app.emit("menubar://data-updated", ());
+    let _ = app.emit("tray://account-switched", &account_id);
 
     Ok(())
 }
@@ -252,7 +257,9 @@ pub async fn import_account_transfer(
     app: tauri::AppHandle,
     item: crate::models::AccountExportItem,
 ) -> Result<AccountView, String> {
-    import_account_transfer_item(&app, item).await.map(AccountView::from)
+    let view = import_account_transfer_item(&app, item).await.map(AccountView::from)?;
+    let _ = app.emit("menubar://data-updated", ());
+    Ok(view)
 }
 
 /// 内部辅助功能：在添加或导入账号后自动刷新一次额度
@@ -310,10 +317,12 @@ pub async fn refresh_all_quotas_internal(
 ) -> Result<RefreshStats, String> {
     let stats = modules::account::refresh_all_quotas_logic().await?;
 
-    // 发送全局刷新事件给 UI (如果需要)
+    // 同步系统托盘菜单并通知主窗口与快捷面板刷新
     if let Some(handle) = app_handle {
         use tauri::Emitter;
+        crate::modules::tray::update_tray_menus(&handle);
         let _ = handle.emit("accounts://refreshed", ());
+        let _ = handle.emit("menubar://data-updated", ());
     }
 
     Ok(stats)
@@ -404,6 +413,8 @@ pub async fn open_oauth_login(app: tauri::AppHandle, flow_id: String) -> Result<
 pub async fn finish_oauth_login(app: tauri::AppHandle, flow_id: String) -> Result<AccountView, String> {
     let service = modules::account_service::AccountService::new(modules::integration::SystemManager::new(app.clone()));
     let account = service.finish_prepared_login(&flow_id).await?;
+    crate::modules::tray::update_tray_menus(&app);
+    let _ = app.emit("menubar://data-updated", ());
     let mut refreshed = account.clone();
     // 账号保存成功即可返回；初始配额在后台获取，避免将网络等待混入已完成的登录。
     tauri::async_runtime::spawn(async move {
@@ -458,6 +469,7 @@ pub async fn import_local_accounts_report(app: tauri::AppHandle) -> Result<Local
     }
     for mut account in report.accounts.clone() { let _ = internal_refresh_account_quota(&app, &mut account).await; }
     crate::modules::tray::update_tray_menus(&app);
+    let _ = app.emit("menubar://data-updated", ());
     Ok(LocalImportView { accounts: report.accounts.into_iter().map(AccountView::from).collect(), sources: report.sources })
 }
 
@@ -490,6 +502,7 @@ pub async fn import_from_db(
     }
 
     crate::modules::tray::update_tray_menus(&app);
+    let _ = app.emit("menubar://data-updated", ());
 
     Ok(imported_accounts.into_iter().map(AccountView::from).collect())
 }
@@ -517,6 +530,7 @@ pub async fn import_custom_db(app: tauri::AppHandle, path: String) -> Result<Acc
         }
         crate::modules::tray::update_tray_menus(&app);
         let _ = app.emit("accounts://refreshed", ());
+        let _ = app.emit("menubar://data-updated", ());
         return Ok(report);
     }
     if is_json_ext { return Err("Cannot read account export file.".into()); }
@@ -529,6 +543,7 @@ pub async fn import_custom_db(app: tauri::AppHandle, path: String) -> Result<Acc
 
     // 刷新托盘图标展示
     crate::modules::tray::update_tray_menus(&app);
+    let _ = app.emit("menubar://data-updated", ());
 
     Ok(AccountFileImportReport { imported: 1, failed: 0 })
 }
@@ -542,6 +557,18 @@ pub struct AccountFileImportReport {
 #[tauri::command]
 pub async fn sync_account_from_db(app: tauri::AppHandle) -> Result<Option<AccountView>, String> {
     modules::account_sync::synchronize(app).await.map(|account| account.map(AccountView::from))
+}
+
+/// 按概览页的请求同步本机 App 登录，供账号库重新识别。
+#[tauri::command]
+pub async fn reconcile_app_sign_in(app: tauri::AppHandle) -> Result<(), String> {
+    {
+        let _guard = crate::cli::SwitchLock::acquire(&modules::account::get_data_dir()?)?;
+        modules::migration::reconcile_app_sign_in().await?;
+    }
+    modules::tray::update_tray_menus(&app);
+    let _ = app.emit("menubar://data-updated", ());
+    Ok(())
 }
 
 pub(crate) async fn sync_account_from_db_internal(app: tauri::AppHandle) -> Result<Option<Account>, String> {
@@ -670,7 +697,7 @@ pub async fn set_window_theme(window: tauri::Window, theme: String) -> Result<()
 pub async fn update_account_label(account_id: String, label: String) -> Result<(), String> {
     // 验证标签长度（按字符数计算，支持中文）
     if label.chars().count() > 15 {
-        return Err("标签长度不能超过15个字符".to_string());
+        return Err("Label must be 15 characters or fewer.".into());
     }
 
     modules::logger::log_info(&format!(
@@ -679,43 +706,15 @@ pub async fn update_account_label(account_id: String, label: String) -> Result<(
         if label.is_empty() { "无" } else { &label }
     ));
 
-    // 1. 读取账号文件
-    let data_dir = modules::account::get_data_dir()?;
-    let account_path = data_dir
-        .join("accounts")
-        .join(format!("{}.json", account_id));
-
-    if !account_path.exists() {
-        return Err(format!("账号文件不存在: {}", account_id));
-    }
-
-    let content =
-        std::fs::read_to_string(&account_path).map_err(|e| format!("读取账号文件失败: {}", e))?;
-
-    let mut account_json: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| format!("解析账号文件失败: {}", e))?;
-
-    // 2. 更新 custom_label 字段
-    if label.is_empty() {
-        account_json["custom_label"] = serde_json::Value::Null;
+    // 与配额刷新、切换、导入等写入方共用同一把账号文件锁，避免并发写竞争与半写入损坏。
+    let _write = modules::account::lock_account_file_updates()?;
+    let mut account = modules::account::load_account(&account_id)?;
+    account.custom_label = if label.is_empty() {
+        None
     } else {
-        account_json["custom_label"] = serde_json::Value::String(label.clone());
-    }
-
-    // 3. 保存到磁盘
-    let json_str = serde_json::to_string_pretty(&account_json)
-        .map_err(|e| format!("序列化账号数据失败: {}", e))?;
-    std::fs::write(&account_path, json_str).map_err(|e| format!("写入账号文件失败: {}", e))?;
-
-    modules::logger::log_info(&format!(
-        "账号标签已更新: {} ({})",
-        account_id,
-        if label.is_empty() {
-            "已清除".to_string()
-        } else {
-            label
-        }
-    ));
+        Some(label.clone())
+    };
+    modules::account::save_account(&account)?;
 
     Ok(())
 }

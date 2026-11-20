@@ -75,6 +75,16 @@ impl Default for Config {
     }
 }
 impl Config {
+    fn prune_candidates(&mut self, root: &std::path::Path) -> Result<bool, String> {
+        let before = self.candidate_account_ids.len();
+        if before == 0 {
+            return Ok(false);
+        }
+        let ids = account::indexed_ids_in_dir(root)?;
+        self.candidate_account_ids.retain(|id| ids.contains(id));
+        Ok(before != self.candidate_account_ids.len())
+    }
+
     pub(crate) fn validate(&self) -> Result<(), String> {
         if !(1..=98).contains(&self.reserve_percentage)
             || self.candidate_min_percentage <= self.reserve_percentage
@@ -182,6 +192,18 @@ pub struct Runtime {
     tick: tokio::sync::Mutex<()>,
 }
 
+impl Runtime {
+    pub(super) fn scheduler_status(&self) -> Result<Status, String> {
+        Ok(self.data.lock().map_err(|_| "Auto-switch state is unavailable.")?.status.clone())
+    }
+
+    async fn live_status(&self, probe: impl FnOnce() -> ProcessState + Send + 'static) -> Result<Status, String> {
+        // 查看状态只读取进程。额度健康、没有候选或策略关闭时同样可以查看。
+        let process_state = tokio::task::spawn_blocking(probe).await.unwrap_or(ProcessState::Unknown);
+        Ok(Status { process_state, ..self.scheduler_status()? })
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct PauseRecord {
     source_id: Option<String>,
@@ -233,15 +255,23 @@ pub(crate) fn read_config_at(root: &std::path::Path) -> Result<Config, String> {
 pub(crate) fn save_config_at(root: &std::path::Path, expected: &Config, config: &Config) -> Result<(), String> {
     config.validate()?;
     let _switch = crate::cli::SwitchLock::acquire(root)?;
+    replace_config_locked(root, expected, config)
+}
+
+fn replace_config_locked(root: &std::path::Path, expected: &Config, config: &Config) -> Result<(), String> {
     if read_config_at(root)? != *expected {
         return Err("auto_switch_settings_changed".into());
     }
-    let bytes = serde_json::to_vec_pretty(config).map_err(|_| "Cannot encode settings.")?;
-    crate::utils::fs::write_atomic(root.join(CONFIG_FILE), &bytes)
-        .map_err(|_| "Cannot save auto-switch settings.")?;
+    write_config_file(root, config)?;
     crate::utils::fs::write_atomic(root.join("auto_switch_state.json"),
         &serde_json::to_vec(&PauseRecord::default()).map_err(|_| "Cannot encode switch state.")?)
         .map_err(|_| "Cannot save switch state.".into())
+}
+
+fn write_config_file(root: &std::path::Path, config: &Config) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(config).map_err(|_| "Cannot encode settings.")?;
+    crate::utils::fs::write_atomic(root.join(CONFIG_FILE), &bytes)
+        .map_err(|_| "Cannot save auto-switch settings.".into())
 }
 
 fn apply_config(d: &mut RuntimeData, config: Config) {
@@ -270,13 +300,18 @@ fn sync_external_config_at(runtime: &Runtime, root: &std::path::Path) -> Result<
     };
     let mut d = runtime.data.lock().map_err(|_| "Auto-switch state is unavailable.")?;
     if d.commit_started { return Ok(()); }
-    let config = read_config_at(root)?;
+    let mut config = read_config_at(root)?;
+    if config.prune_candidates(root)? {
+        config.enabled &= !config.candidate_account_ids.is_empty();
+        // 迁移旧候选名单时保留已取消或暂停的任务状态。
+        write_config_file(root, &config)?;
+    }
     if config != d.config {
         let pause = read_pause_at(root)?;
         apply_config(&mut d, config);
         d.canceled_source = pause.source_id;
         d.failed = pause.failed;
-        if d.failed { d.status.set("blocked", "switch_failed"); }
+        if d.failed && d.config.enabled { d.status.set("blocked", "switch_failed"); }
     }
     Ok(())
 }
@@ -431,7 +466,10 @@ fn account_remaining(a: &Account, model: &str, now: i64) -> Result<f64, &'static
 /// evidence of a running task; it simply prevents this closed-client-only mode.
 fn clients() -> ProcessState {
     let mut system = sysinfo::System::new();
-    system.refresh_processes(sysinfo::ProcessesToUpdate::All);
+    system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::All,
+        sysinfo::ProcessRefreshKind::new().with_exe(sysinfo::UpdateKind::OnlyIfNotSet),
+    );
     if system.processes().is_empty() {
         return ProcessState::Unknown;
     }
@@ -472,8 +510,6 @@ fn is_client_process(
     let name = name.to_ascii_lowercase();
     if name == "agyflux" || name == "agyflux.exe"
         || name == "agyflux-desktop" || name == "agyflux-desktop.exe"
-        || name == "agy-switch" || name == "agy-switch.exe"
-        || name == "agy-switch-desktop" || name == "agy-switch-desktop.exe"
         || name.starts_with("antigravity-tools") || name.starts_with("antigravity_tools") {
         return false;
     }
@@ -829,10 +865,10 @@ pub fn start(app: tauri::AppHandle) {
     if let Ok(mut d) = runtime.data.lock() {
         match (read_config(), read_pause()) {
             (Ok(c), Ok(pause)) => {
-                d.config = c;
+                apply_config(&mut d, c);
                 d.canceled_source = pause.source_id;
                 d.failed = pause.failed;
-                if d.failed {
+                if d.failed && d.config.enabled {
                     d.status.set("blocked", "switch_failed");
                 }
             }
@@ -869,10 +905,19 @@ pub fn get_auto_switch_config(app: tauri::AppHandle) -> Result<Config, String> {
         .clone())
 }
 #[tauri::command]
-pub fn set_auto_switch_config(app: tauri::AppHandle, mut config: Config) -> Result<Config, String> {
+pub fn set_auto_switch_config(app: tauri::AppHandle, config: Config, expected: Option<Config>) -> Result<Config, String> {
+    save_desktop_config_at(&app.state::<Runtime>(), &account::get_data_dir()?, config, expected.as_ref())
+}
+
+fn save_desktop_config_at(runtime: &Runtime, root: &std::path::Path, mut config: Config, expected: Option<&Config>) -> Result<Config, String> {
+    let _switch = crate::cli::SwitchLock::acquire(root)?;
+    let _accounts = account::lock_account_file_updates()?;
     config.monitored_model = config.monitored_model.trim().to_owned();
+    config.prune_candidates(root)?;
+    if config.enabled && config.candidate_account_ids.is_empty() {
+        return Err("auto_switch_no_candidates".into());
+    }
     config.validate()?;
-    let runtime = app.state::<Runtime>();
     let mut d = runtime
         .data
         .lock()
@@ -883,29 +928,13 @@ pub fn set_auto_switch_config(app: tauri::AppHandle, mut config: Config) -> Resu
                 .into(),
         );
     }
-    if config.enabled {
-        let accounts = account::list_accounts()?;
-        if config
-            .candidate_account_ids
-            .iter()
-            .any(|id| !accounts.iter().any(|a| &a.id == id))
-        {
-            return Err("A selected account no longer exists. Refresh the account list.".into());
-        }
-    }
-    save_config_at(&account::get_data_dir()?, &d.config, &config)?;
+    replace_config_locked(root, expected.unwrap_or(&d.config), &config)?;
     apply_config(&mut d, config.clone());
     Ok(config)
 }
 #[tauri::command]
-pub fn get_auto_switch_status(app: tauri::AppHandle) -> Result<Status, String> {
-    Ok(app
-        .state::<Runtime>()
-        .data
-        .lock()
-        .map_err(|_| "Auto-switch state is unavailable.")?
-        .status
-        .clone())
+pub async fn get_auto_switch_status(app: tauri::AppHandle) -> Result<Status, String> {
+    app.state::<Runtime>().live_status(clients).await
 }
 #[tauri::command]
 pub fn cancel_auto_switch(app: tauri::AppHandle, pending_id: String) -> Result<Status, String> {
@@ -938,7 +967,7 @@ fn cancel_pending(runtime: &Runtime, pending_id: &str) -> Result<Status, String>
 #[tauri::command]
 pub async fn check_auto_switch_now(app: tauri::AppHandle) -> Result<Status, String> {
     evaluate(&app, true).await?;
-    get_auto_switch_status(app)
+    get_auto_switch_status(app).await
 }
 
 async fn refresh<E: Environment>(
@@ -1818,7 +1847,7 @@ mod tests {
             Some(Path::new("/Applications/Antigravity.app/tools")),
             &[]
         ));
-        for name in ["agyflux", "agyflux.exe", "agyflux-desktop", "agyflux-desktop.exe", "agy-switch", "agy-switch.exe", "agy-switch-desktop", "agy-switch-desktop.exe"] {
+        for name in ["agyflux", "agyflux.exe", "agyflux-desktop", "agyflux-desktop.exe"] {
             assert!(!is_client_process(name, Some(Path::new("/Applications/Antigravity.app/tools")), &[]));
         }
         assert!(!is_client_process(
@@ -2055,6 +2084,19 @@ mod tests {
         };
         assert_eq!(std::env::var_os("ABV_DATA_DIR"), Some(root));
         tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let r = fixture_setup(Mode::Wait);
+            account::save_account(&account_fixture("A", 0.8, 0.8)).unwrap();
+            let env = FixtureEnvironment::default();
+            assert!(!evaluate_core(&r, env.clone(), false).await.unwrap());
+            for observed in [ProcessState::Running, ProcessState::Closed, ProcessState::Unknown] {
+                let shown = r.live_status(move || observed).await.unwrap();
+                assert_eq!(shown.phase, "monitoring");
+                assert_eq!(shown.remaining_percentage, Some(80.0));
+                assert_eq!(shown.process_state, observed);
+                assert!(shown.pending_id.is_none());
+            }
+            assert_eq!(env.closes.load(SeqCst), 0);
+            assert_eq!(env.writes.load(SeqCst), 0);
             for mode in [Mode::Wait, Mode::Stop] {
                 let r = fixture_setup(mode);
                 let env = FixtureEnvironment::default();
@@ -2338,6 +2380,54 @@ mod tests {
 #[cfg(test)]
 mod config_file_tests {
     use super::*;
+    fn write_index(root: &std::path::Path, ids: &[&str]) {
+        let rows = ids.iter().map(|id| serde_json::json!({
+            "id": id, "email":"sample@example.invalid", "created_at":0, "last_used":0
+        })).collect::<Vec<_>>();
+        let index = serde_json::json!({"version":"2.0", "accounts":rows});
+        std::fs::write(root.join("accounts.json"), index.to_string()).unwrap();
+    }
+
+    #[test]
+    fn deleted_candidates_are_removed_without_selecting_replacements() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let runtime = Runtime::default();
+        write_index(root, &["B", "C", "D"]);
+        let original = Config { enabled: true, candidate_account_ids: vec!["C".into(), "A".into(), "B".into()],
+            ..Config::default() };
+        write_config_file(root, &original).unwrap();
+        sync_external_config_at(&runtime, root).unwrap();
+        let saved = read_config_at(root).unwrap();
+        assert!(saved.enabled);
+        assert_eq!(saved.candidate_account_ids, ["C", "B"]);
+        assert_eq!(runtime.data.lock().unwrap().config, saved);
+        // 一个候选账号也没有时关闭策略，下次启动读取的也是关闭状态。
+        write_index(root, &["D"]);
+        sync_external_config_at(&runtime, root).unwrap();
+        let off = read_config_at(root).unwrap();
+        assert!(!off.enabled && off.candidate_account_ids.is_empty());
+        assert_eq!(runtime.data.lock().unwrap().status.phase, "disabled");
+        assert_eq!(save_desktop_config_at(&runtime, root, original, Some(&off)).unwrap_err(), "auto_switch_no_candidates");
+        assert_eq!(read_config_at(root).unwrap(), off);
+        let requested = Config { enabled: true, candidate_account_ids: vec!["A".into(), "D".into()], ..off.clone() };
+        let saved = save_desktop_config_at(&runtime, root, requested, Some(&off)).unwrap();
+        assert!(saved.enabled);
+        assert_eq!(saved.candidate_account_ids, ["D"]);
+        assert_eq!(save_desktop_config_at(&runtime, root, off.clone(), Some(&off)).unwrap_err(), "auto_switch_settings_changed");
+        assert_eq!(read_config_at(root).unwrap(), saved);
+    }
+
+    #[test]
+    fn unreadable_index_does_not_erase_saved_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = Config { candidate_account_ids: vec!["account".into()], ..Config::default() };
+        write_config_file(dir.path(), &original).unwrap();
+        std::fs::write(dir.path().join("accounts.json"), "{").unwrap();
+        assert!(sync_external_config_at(&Runtime::default(), dir.path()).is_err());
+        assert_eq!(read_config_at(dir.path()).unwrap(), original);
+    }
+
     #[test]
     fn external_edits_invalidate_pending_work_and_detect_stale_editors() {
         let dir = tempfile::tempdir().unwrap();

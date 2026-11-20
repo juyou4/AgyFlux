@@ -295,6 +295,8 @@ pub fn run() {
             modules::auto_switch::check_auto_switch_now,
             modules::auto_switch::cancel_auto_switch,
             modules::desktop::get_desktop_settings,
+            #[cfg(windows)]
+            modules::client_proxy::launch_antigravity_with_proxy,
             modules::desktop::get_menu_bar_appearance,
             modules::desktop::set_desktop_preferences,
             modules::desktop::set_menu_bar_pinned,
@@ -337,6 +339,7 @@ pub fn run() {
             commands::import_local_accounts_report,
             commands::import_custom_db,
             commands::sync_account_from_db,
+            commands::reconcile_app_sign_in,
             commands::open_data_folder,
             commands::get_data_dir_path,
             commands::show_main_window,

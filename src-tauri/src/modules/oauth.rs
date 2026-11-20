@@ -77,8 +77,34 @@ pub struct OAuthClientDescriptor {
 const OAUTH_CLIENTS_ENV: &str = "ANTIGRAVITY_OAUTH_CLIENTS";
 const ACTIVE_OAUTH_CLIENT_ENV: &str = "ANTIGRAVITY_OAUTH_CLIENT_KEY";
 const DEFAULT_OAUTH_CLIENT_KEY: &str = "antigravity_enterprise";
-const MISSING_OAUTH_CLIENT: &str =
-    "No Google OAuth client configured. See docs/cc-switch-login.md.";
+const MISSING_OAUTH_CLIENT: &str = "oauth_client_not_configured";
+const LOCAL_OAUTH_FILE: &str = "google-oauth.json";
+
+#[derive(Deserialize)]
+struct LocalOAuthClient {
+    client_id: String,
+    client_secret: String,
+}
+
+fn read_local_client(directory: &std::path::Path) -> Option<LocalOAuthClient> {
+    let file = directory.join(LOCAL_OAUTH_FILE);
+    let bytes = match std::fs::read(file) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(_) => {
+            crate::modules::logger::log_warn("无法读取本机 Google 授权配置");
+            return None;
+        }
+    };
+    let json = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes);
+    match serde_json::from_slice::<LocalOAuthClient>(json) {
+        Ok(client) if !client.client_id.trim().is_empty() && !client.client_secret.trim().is_empty() => Some(client),
+        _ => {
+            crate::modules::logger::log_warn("本机 Google 授权配置格式无效");
+            None
+        }
+    }
+}
 
 static OAUTH_CLIENT_REGISTRY: std::sync::OnceLock<std::sync::RwLock<OAuthClientRegistry>> =
     std::sync::OnceLock::new();
@@ -181,10 +207,87 @@ fn build_registry(
     }
 }
 
+fn apply_local_client_to_registry(
+    registry: &mut OAuthClientRegistry,
+    local: Option<LocalOAuthClient>,
+) {
+    let Some(local) = local else {
+        return;
+    };
+    let client_id = local.client_id.trim();
+    let client_secret = local.client_secret.trim();
+    if client_id.is_empty() || client_secret.is_empty() {
+        return;
+    }
+
+    if let Some(existing) = registry
+        .clients
+        .iter_mut()
+        .find(|c| c.key == DEFAULT_OAUTH_CLIENT_KEY)
+    {
+        if existing.is_builtin
+            && (existing.client_id != client_id || existing.client_secret != client_secret)
+        {
+            existing.client_id = client_id.to_string();
+            existing.client_secret = client_secret.to_string();
+        }
+        return;
+    }
+
+    registry.clients.insert(
+        0,
+        OAuthClientConfig {
+            key: DEFAULT_OAUTH_CLIENT_KEY.to_string(),
+            label: "Antigravity Enterprise".to_string(),
+            client_id: client_id.to_string(),
+            client_secret: client_secret.to_string(),
+            is_builtin: true,
+        },
+    );
+    if !registry.clients.iter().any(|c| c.key == registry.active_key) {
+        registry.active_key = DEFAULT_OAUTH_CLIENT_KEY.to_string();
+    }
+}
+
+fn sync_local_oauth_client(lock: &std::sync::RwLock<OAuthClientRegistry>) {
+    let local = crate::modules::account::get_data_dir()
+        .ok()
+        .and_then(|directory| read_local_client(&directory));
+    let Some(local) = local else {
+        return;
+    };
+    let needs_update = match lock.read() {
+        Ok(guard) => match guard
+            .clients
+            .iter()
+            .find(|c| c.key == DEFAULT_OAUTH_CLIENT_KEY)
+        {
+            Some(existing) => {
+                existing.is_builtin
+                    && (existing.client_id != local.client_id.trim()
+                        || existing.client_secret != local.client_secret.trim())
+            }
+            None => true,
+        },
+        Err(_) => false,
+    };
+    if needs_update {
+        if let Ok(mut guard) = lock.write() {
+            apply_local_client_to_registry(&mut guard, Some(local));
+        }
+    }
+}
+
 fn oauth_registry() -> &'static std::sync::RwLock<OAuthClientRegistry> {
-    OAUTH_CLIENT_REGISTRY.get_or_init(|| {
-        let default_credentials = option_env!("AGYFLUX_GOOGLE_OAUTH_CLIENT_ID")
-            .zip(option_env!("AGYFLUX_GOOGLE_OAUTH_CLIENT_SECRET"));
+    let lock = OAUTH_CLIENT_REGISTRY.get_or_init(|| {
+        let local_client = crate::modules::account::get_data_dir()
+            .ok()
+            .and_then(|directory| read_local_client(&directory));
+        let default_credentials = local_client
+            .as_ref()
+            .map(|client| (client.client_id.as_str(), client.client_secret.as_str()))
+            .or_else(|| option_env!("AGYFLUX_GOOGLE_OAUTH_CLIENT_ID")
+                .zip(option_env!("AGYFLUX_GOOGLE_OAUTH_CLIENT_SECRET")));
         let extra_clients = std::env::var(OAUTH_CLIENTS_ENV).ok();
         let active_client = std::env::var(ACTIVE_OAUTH_CLIENT_ENV).ok();
         std::sync::RwLock::new(build_registry(
@@ -192,7 +295,10 @@ fn oauth_registry() -> &'static std::sync::RwLock<OAuthClientRegistry> {
             extra_clients.as_deref(),
             active_client.as_deref(),
         ))
-    })
+    });
+    // 支持在应用运行期间放入或更新 google-oauth.json 后即时生效，无需重启。
+    sync_local_oauth_client(lock);
+    lock
 }
 
 fn get_client_by_key<'a>(
@@ -746,6 +852,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn local_oauth_profile_is_optional_and_accepts_windows_utf8_bom() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join(LOCAL_OAUTH_FILE);
+        assert!(read_local_client(directory.path()).is_none());
+        std::fs::write(&file, br#"{"client_id":"client","client_secret":" "}"#).unwrap();
+        assert!(read_local_client(directory.path()).is_none());
+        let mut profile = vec![0xef, 0xbb, 0xbf];
+        profile.extend_from_slice(br#"{"client_id":"local-client","client_secret":"local-secret"}"#);
+        std::fs::write(&file, profile).unwrap();
+        let local = read_local_client(directory.path()).unwrap();
+        let registry = build_registry(Some((&local.client_id, &local.client_secret)), None, None);
+        let client = active_or_first_client(&registry).unwrap();
+        assert_eq!(client.key, DEFAULT_OAUTH_CLIENT_KEY);
+        assert_eq!(client.client_id, "local-client");
+    }
+
+    #[test]
     fn test_get_auth_url_contains_state() {
         let redirect_uri = "http://localhost:8080/callback";
         let state = "test-state-123456";
@@ -776,5 +899,33 @@ mod tests {
         assert_eq!(client.key, "desktop");
         assert_eq!(client.client_id, "runtime-client");
         assert!(!client.is_builtin);
+    }
+
+    #[test]
+    fn local_oauth_profile_can_be_loaded_and_updated_dynamically() {
+        let mut registry = build_registry(None, None, None);
+        assert!(active_or_first_client(&registry).is_none());
+
+        apply_local_client_to_registry(
+            &mut registry,
+            Some(LocalOAuthClient {
+                client_id: "hot-client-1".into(),
+                client_secret: "hot-secret-1".into(),
+            }),
+        );
+        let loaded = active_or_first_client(&registry).unwrap();
+        assert_eq!(loaded.client_id, "hot-client-1");
+        assert_eq!(loaded.client_secret, "hot-secret-1");
+
+        apply_local_client_to_registry(
+            &mut registry,
+            Some(LocalOAuthClient {
+                client_id: "hot-client-2".into(),
+                client_secret: "hot-secret-2".into(),
+            }),
+        );
+        let updated = active_or_first_client(&registry).unwrap();
+        assert_eq!(updated.client_id, "hot-client-2");
+        assert_eq!(updated.client_secret, "hot-secret-2");
     }
 }

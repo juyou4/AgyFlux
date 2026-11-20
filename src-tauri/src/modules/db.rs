@@ -179,7 +179,10 @@ fn inject_new_format(
     project_id: Option<&str>,
     id_token: Option<&str>,
 ) -> Result<String, String> {
-    let conn = Connection::open(db_path).map_err(|e| format!("Failed to open database: {}", e))?;
+    let mut conn =
+        Connection::open(db_path).map_err(|e| format!("Failed to open database: {}", e))?;
+    // 等待刚退出客户端释放 SQLite 锁，避免切换时偶发 SQLITE_BUSY。
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
 
     // Create OAuthTokenInfo (binary)
     let oauth_info = protobuf::create_oauth_info(
@@ -192,9 +195,14 @@ fn inject_new_format(
     );
 
     use base64::{engine::general_purpose, Engine as _};
-    use rusqlite::OptionalExtension;
+    use rusqlite::{OptionalExtension, TransactionBehavior};
 
-    let current_topic = conn
+    // 使用 IMMEDIATE 事务把多条凭据与状态写入原子提交，避免半写入导致账号与状态错位。
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| format!("Failed to start database transaction: {}", e))?;
+
+    let current_topic = tx
         .query_row(
             "SELECT value FROM ItemTable WHERE key = ?",
             ["antigravityUnifiedStateSync.oauthToken"],
@@ -214,22 +222,22 @@ fn inject_new_format(
 
     let topic_b64 = general_purpose::STANDARD.encode(&topic);
 
-    conn.execute(
+    tx.execute(
         "INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)",
         ["antigravityUnifiedStateSync.oauthToken", &topic_b64],
     )
     .map_err(|e| format!("Failed to write new format: {}", e))?;
 
-    inject_user_status(&conn, email)?;
+    inject_user_status(&tx, email)?;
 
     if let Some(project_id) = project_id.map(str::trim).filter(|pid| !pid.is_empty()) {
-        inject_enterprise_project_preference(&conn, project_id)?;
+        inject_enterprise_project_preference(&tx, project_id)?;
     } else {
-        clear_enterprise_project_preference(&conn)?;
+        clear_enterprise_project_preference(&tx)?;
     }
 
     // Inject Onboarding flag
-    conn.execute(
+    tx.execute(
         "INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)",
         ["antigravityOnboarding", "true"],
     )
@@ -237,10 +245,13 @@ fn inject_new_format(
 
     // Fix for missing history: Delete the old format state to prevent the IDE from reading a stale UserID
     // which causes history fetching to fail.
-    let _ = conn.execute(
+    let _ = tx.execute(
         "DELETE FROM ItemTable WHERE key = ?",
         ["jetskiStateSync.agentManagerInitState"],
     );
+
+    tx.commit()
+        .map_err(|e| format!("Failed to commit database injection: {}", e))?;
 
     Ok("Token injection successful (new format)".to_string())
 }

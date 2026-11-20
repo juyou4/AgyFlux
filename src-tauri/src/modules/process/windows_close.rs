@@ -1,5 +1,5 @@
 #[cfg(target_os = "windows")]
-pub(super) fn request_windows_close(pids: &[u32]) -> Result<(), String> {
+pub(super) fn request_windows_close(pids: &[u32]) -> Result<usize, String> {
     use windows_sys::Win32::Foundation::{HWND, LPARAM};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
@@ -7,6 +7,7 @@ pub(super) fn request_windows_close(pids: &[u32]) -> Result<(), String> {
 
     struct CloseRequest<'a> {
         pids: &'a [u32],
+        posted: usize,
         failed: bool,
     }
     unsafe extern "system" fn visit(window: HWND, data: LPARAM) -> i32 {
@@ -14,22 +15,28 @@ pub(super) fn request_windows_close(pids: &[u32]) -> Result<(), String> {
         let request = &mut *(data as *mut CloseRequest<'_>);
         let mut pid = 0;
         GetWindowThreadProcessId(window, &mut pid);
-        if pid != 0 && request.pids.contains(&pid) && IsWindowVisible(window) != 0
-            && PostMessageW(window, WM_CLOSE, 0, 0) == 0
-        {
-            request.failed = true;
+        if pid != 0 && request.pids.contains(&pid) && IsWindowVisible(window) != 0 {
+            if PostMessageW(window, WM_CLOSE, 0, 0) == 0 {
+                request.failed = true;
+            } else {
+                request.posted += 1;
+            }
         }
         1
     }
 
-    let mut request = CloseRequest { pids, failed: false };
+    let mut request = CloseRequest {
+        pids,
+        posted: 0,
+        failed: false,
+    };
     let enumerated = unsafe { EnumWindows(Some(visit), &mut request as *mut _ as LPARAM) };
     if enumerated == 0 || request.failed {
         return Err(
             "Unable to request Antigravity to close; please close it manually and retry".into(),
         );
     }
-    Ok(())
+    Ok(request.posted)
 }
 
 #[cfg(test)]
@@ -76,9 +83,9 @@ mod tests {
             DestroyWindow(window);
         }
 
-        assert!(unrelated.is_ok());
+        assert_eq!(unrelated, Ok(0));
         assert!(!wrongly_posted);
-        assert!(targeted.is_ok());
+        assert!(matches!(targeted, Ok(n) if n >= 1));
         assert!(correctly_posted);
         assert!(!hidden_posted);
     }

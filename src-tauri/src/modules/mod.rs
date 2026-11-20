@@ -11,6 +11,8 @@ pub(crate) mod app_state_recovery;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub(crate) mod app_metadata_macos;
 pub mod cli_credentials;
+#[cfg(windows)]
+pub(crate) mod client_proxy;
 pub(crate) mod client_status;
 pub mod config;
 pub mod db;

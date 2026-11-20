@@ -1,4 +1,4 @@
-//! macOS overview is an NSMenu, like CodexBar: AppKit owns the surface and
+//! macOS overview is a native NSMenu: AppKit owns the surface and
 //! tracking; custom content uses semantic system text and small quota bars.
 //! No WebView transparency, root-view replacement, or credential DTOs.
 use super::{account_dashboard::{DashboardSnapshot, DashboardEntry}, menu_bar_projection as projection};
@@ -11,12 +11,12 @@ use crate::models::config::{MenuBarPreferences, MenuBarQuotaScope, MenuBarResetT
 use tauri_plugin_opener::OpenerExt;
 use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer, NSRunLoop, NSRunLoopCommonModes};
 use std::{cell::{Cell, RefCell}, sync::{Mutex, mpsc, atomic::{AtomicBool, AtomicU64, Ordering}}, time::Instant};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 const WIDTH: f64 = 424.0;
 const FAMILY_GAP: f64 = 24.0;
 const BRAND: &str = "AgyFlux";
-const GITHUB: &str = "https://github.com/anglee0323/agy-switch";
+const GITHUB: &str = "https://github.com/juyou4/AgyFlux";
 static OPEN: AtomicBool = AtomicBool::new(false);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 static BUSY: AtomicBool = AtomicBool::new(false);
@@ -731,7 +731,7 @@ pub fn toggle(app: &tauri::AppHandle, _anchor: Option<tauri::Rect>) -> Result<()
         let usage = modules::menu_bar_usage::cached();
         if !OPEN.load(Ordering::Acquire) || GENERATION.load(Ordering::Acquire) != ticket { return; }
         let config = modules::load_app_config().unwrap_or_default();
-        let status = modules::auto_switch::get_auto_switch_status(app.clone()).ok();
+        let status = app.state::<modules::auto_switch::Runtime>().scheduler_status().ok();
         let reserve = modules::auto_switch::get_auto_switch_config(app.clone()).map(|config| config.reserve_percentage).unwrap_or(10);
         let handle = app.clone();
         if handle.run_on_main_thread(move || show(app, config, snapshot, usage, status, reserve, ticket, updates, started)).is_err() { OPEN.store(false, Ordering::Release); }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Database,
+  FileArrowUp,
   Key,
   UserPlus,
   X,
@@ -13,6 +14,7 @@ import { OAuthLoginPanel } from './OAuthLoginPanel';
 import { showToast } from '../motion/SpringToast';
 import * as accountService from '../../services/accountService';
 import { useAccountStore } from '../../stores/useAccountStore';
+import { isTauri } from '../../utils/env';
 
 interface AddAccountDialogProps {
   open: boolean;
@@ -25,10 +27,12 @@ export function AddAccountDialog({ open, onClose }: AddAccountDialogProps) {
   const { i18n } = useTranslation();
   const zh = i18n.language.startsWith('zh');
   const fetchAccounts = useAccountStore((s) => s.fetchAccounts);
+  const importFromCustomDb = useAccountStore((s) => s.importFromCustomDb);
 
   const [mode, setMode] = useState<AddMode>('oauth');
   const [tokenInput, setTokenInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [scanSources, setScanSources] = useState<accountService.LocalImportSource[] | null>(null);
   const [mounted, setMounted] = useState(open);
   const [closing, setClosing] = useState(false);
 
@@ -36,6 +40,7 @@ export function AddAccountDialog({ open, onClose }: AddAccountDialogProps) {
     if (open) {
       setMounted(true);
       setClosing(false);
+      setScanSources(null);
       return;
     }
     if (!mounted) return;
@@ -102,29 +107,99 @@ export function AddAccountDialog({ open, onClose }: AddAccountDialogProps) {
     }
   };
 
+  const formatSourceStatus = (status: string) => {
+    const labels: Record<string, string> = zh
+      ? {
+          imported: '已导入',
+          duplicate: '重复跳过',
+          missing_credentials: '未登录',
+          validation_failed: '验证失败',
+          unavailable: '未检测到',
+        }
+      : {
+          imported: 'Imported',
+          duplicate: 'Duplicate',
+          missing_credentials: 'Empty',
+          validation_failed: 'Verify failed',
+          unavailable: 'Unavailable',
+        };
+    return labels[status] ?? status;
+  };
+
   const handleLocalScan = async () => {
     setBusy(true);
+    setScanSources(null);
     try {
       const report = await accountService.importLocalAccountsReport();
-      await fetchAccounts();
+      await fetchAccounts(true);
       const count = report?.accounts?.length ?? 0;
-      showToast(
-        zh ? `已导入 ${count} 个本机账号` : `Imported ${count} local accounts`,
-        'success'
-      );
-      onClose();
-    } catch {
-      try {
-        const list = await accountService.importFromDb();
-        await fetchAccounts();
+      if (count > 0) {
         showToast(
-          zh ? `已导入 ${list.length} 个本机账号` : `Imported ${list.length} local accounts`,
+          zh ? `已导入 ${count} 个本机账号` : `Imported ${count} local account(s)`,
           'success'
         );
         onClose();
-      } catch (err) {
-        showToast(String(err), 'error');
+        return;
       }
+      setScanSources(report?.sources ?? []);
+      showToast(
+        zh
+          ? '未导入新账号，请检查各来源诊断状态、客户端登录与网络代理。'
+          : 'No accounts imported. Review source diagnostics, client sign-in, and proxy settings.',
+        'info'
+      );
+    } catch (err) {
+      showToast(String(err), 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSelectFileImport = async () => {
+    if (!isTauri()) {
+      showToast(
+        zh ? '请在桌面端应用中使用文件导入功能' : 'File import is only available in the desktop app',
+        'info'
+      );
+      return;
+    }
+    setBusy(true);
+    try {
+      const { open: openFileDialog } = await import('@tauri-apps/plugin-dialog');
+      const selected = await openFileDialog({
+        multiple: false,
+        directory: false,
+        filters: [
+          {
+            name: zh ? '账号数据库或导出文件' : 'State DB or Export JSON',
+            extensions: ['vscdb', 'json'],
+          },
+        ],
+      });
+      if (typeof selected !== 'string' || !selected.trim()) {
+        return;
+      }
+      const report = await importFromCustomDb(selected.trim());
+      if (report.imported > 0) {
+        showToast(
+          report.failed > 0
+            ? zh
+              ? `已导入 ${report.imported} 个账号，${report.failed} 个失败`
+              : `Imported ${report.imported} account(s), ${report.failed} failed`
+            : zh
+              ? `已从文件导入 ${report.imported} 个账号`
+              : `Imported ${report.imported} account(s) from file`,
+          report.failed > 0 ? 'info' : 'success'
+        );
+        onClose();
+      } else {
+        showToast(
+          zh ? '文件中未找到可导入的有效账号' : 'No valid accounts imported from the selected file',
+          'error'
+        );
+      }
+    } catch (err) {
+      showToast(String(err), 'error');
     } finally {
       setBusy(false);
     }
@@ -214,18 +289,57 @@ export function AddAccountDialog({ open, onClose }: AddAccountDialogProps) {
             <div className="space-y-3">
               <div className="rounded-[22px] bg-[var(--surface-soft)] p-4 text-xs leading-relaxed text-[var(--ink-secondary)]">
                 {zh
-                  ? '只读扫描本机 Antigravity 客户端、IDE、agy CLI 与 VS Code 登录凭据，不改动原配置。'
-                  : 'Scan local Antigravity App, IDE, agy CLI, and VS Code sessions read-only.'}
+                  ? '只读扫描本机 Antigravity 客户端、IDE、agy CLI 与 VS Code 登录凭据，不改动原配置；也可以手动选择 state.vscdb 或导出的 JSON 文件导入。'
+                  : 'Scan local Antigravity App, IDE, agy CLI, and VS Code sessions read-only, or pick a state.vscdb / exported JSON file manually.'}
               </div>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void handleLocalScan()}
-                className="tactile-press flex h-10 w-full items-center justify-center gap-2 rounded-full border border-[var(--primary-border)] bg-[var(--primary-soft)] text-xs font-semibold text-[var(--primary-ink)] hover:bg-[var(--primary-soft-hover)] disabled:opacity-50"
-              >
-                {busy ? <CircleNotch size={15} className="animate-spin" /> : <Database size={15} weight="bold" />}
-                <span>{zh ? '扫描并导入' : 'Scan & Import'}</span>
-              </button>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void handleLocalScan()}
+                  className="tactile-press flex h-10 w-full items-center justify-center gap-2 rounded-full border border-[var(--primary-border)] bg-[var(--primary-soft)] text-xs font-semibold text-[var(--primary-ink)] hover:bg-[var(--primary-soft-hover)] disabled:opacity-50"
+                >
+                  {busy ? <CircleNotch size={15} className="animate-spin" /> : <Database size={15} weight="bold" />}
+                  <span>{zh ? '扫描并导入' : 'Scan & Import'}</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void handleSelectFileImport()}
+                  className="tactile-press flex h-10 w-full items-center justify-center gap-2 rounded-full border border-[var(--border-hairline)] bg-[var(--surface)] text-xs font-semibold text-[var(--ink)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                >
+                  <FileArrowUp size={15} weight="bold" />
+                  <span>{zh ? '选择文件导入' : 'Import File'}</span>
+                </button>
+              </div>
+              {scanSources && scanSources.length > 0 && (
+                <div className="max-h-40 space-y-1.5 overflow-y-auto rounded-[20px] bg-[var(--surface-soft)] p-3">
+                  <div className="px-1 text-[11px] font-semibold text-[var(--ink-secondary)]">
+                    {zh ? '扫描来源诊断' : 'Scan Diagnostics'}
+                  </div>
+                  {scanSources.map((item, idx) => (
+                    <div
+                      key={`${item.source}-${idx}`}
+                      className="flex items-center justify-between gap-2 rounded-full bg-[var(--bg-card)] px-3 py-1.5 text-[11px]"
+                    >
+                      <span className="min-w-0 truncate text-[var(--ink-secondary)]" title={item.source}>
+                        {item.source}
+                      </span>
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                          item.status === 'validation_failed'
+                            ? 'bg-[var(--rose-soft)] text-[var(--rose-ink)]'
+                            : item.status === 'imported'
+                              ? 'bg-[var(--emerald-soft)] text-[var(--emerald-ink)]'
+                              : 'bg-[var(--surface)] text-[var(--ink-muted)]'
+                        }`}
+                      >
+                        {formatSourceStatus(item.status)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

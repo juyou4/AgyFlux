@@ -28,6 +28,10 @@ interface LoginDependencies<T> {
 const initialState = <T>(): OAuthLoginState<T> => ({ phase: 'idle', submitting: false, callbackSubmitted: false });
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
+export function isMissingOAuthClient(error: string): boolean {
+  return error === 'oauth_client_not_configured' || error.startsWith('No Google OAuth client configured');
+}
+
 /** 每次登录只创建一个等待者；手动回调投递到同一会话，旧请求不更新新界面。 */
 export function createOAuthLoginFlow<T>(deps: LoginDependencies<T>) {
   let state = initialState<T>();
@@ -145,16 +149,14 @@ export function createOAuthLoginFlow<T>(deps: LoginDependencies<T>) {
   };
 }
 
-// 借鉴 CC Switch 的本机浏览器偏好；不保存授权链接、回调或令牌。
+// 只保存是否自动打开浏览器的偏好。
 const BROWSER_PREFERENCE_KEY = 'agyflux.oauth.openBrowser';
-const LEGACY_BROWSER_PREFERENCE_KEY = 'antigravity-switch.oauth.openBrowser';
 type PreferenceStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
 export function readOAuthBrowserPreference(storage?: PreferenceStorage): boolean {
   try {
     const preferences = storage ?? globalThis.localStorage;
-    // 改名后读取旧偏好作为兜底，新写入统一使用 AgyFlux 的键名。
-    return (preferences.getItem(BROWSER_PREFERENCE_KEY) ?? preferences.getItem(LEGACY_BROWSER_PREFERENCE_KEY)) !== 'false';
+    return preferences.getItem(BROWSER_PREFERENCE_KEY) !== 'false';
   }
   catch { return true; }
 }

@@ -85,17 +85,16 @@ function MinimalUpdatePrompt() {
 export default function App() {
   const config = useConfigStore((s) => s.config);
   const loadConfig = useConfigStore((s) => s.loadConfig);
-  const fetchCurrentAccount = useAccountStore((s) => s.fetchCurrentAccount);
   const fetchAccounts = useAccountStore((s) => s.fetchAccounts);
+  const fetchActiveClients = useAccountStore((s) => s.fetchActiveClients);
   const { i18n } = useTranslation();
 
   useEffect(() => {
     void loadConfig();
     if (window.location.pathname !== '/menubar') {
-      void fetchCurrentAccount();
       void fetchAccounts();
     }
-  }, [loadConfig, fetchCurrentAccount, fetchAccounts]);
+  }, [loadConfig, fetchAccounts]);
 
   // 同步配置文件里的语言设置
   useEffect(() => {
@@ -108,7 +107,7 @@ export default function App() {
     }
   }, [config?.language, i18n]);
 
-  // 监听 Tauri 后端及系统托盘生命周期事件
+  // 监听 Tauri 后端及系统托盘生命周期事件，并节流监听窗口重新聚焦
   useEffect(() => {
     if (!isTauri()) return;
     const unlistenPromises: Promise<() => void>[] = [];
@@ -126,23 +125,33 @@ export default function App() {
 
     unlistenPromises.push(
       listen('tray://account-switched', () => {
-        void fetchCurrentAccount();
-        void fetchAccounts();
+        void fetchAccounts(true);
       }),
       listen('tray://refresh-current', () => {
-        void fetchCurrentAccount();
-        void fetchAccounts();
+        void fetchAccounts(true);
       }),
       listen('accounts://refreshed', () => {
-        void fetchCurrentAccount();
+        void fetchAccounts();
+      }),
+      listen('menubar://data-updated', () => {
         void fetchAccounts();
       })
     );
 
+    let lastFocusSync = 0;
+    const onFocus = () => {
+      const now = Date.now();
+      if (now - lastFocusSync < 3000) return;
+      lastFocusSync = now;
+      void fetchActiveClients();
+    };
+    window.addEventListener('focus', onFocus);
+
     return () => {
+      window.removeEventListener('focus', onFocus);
       void Promise.all(unlistenPromises).then((listeners) => listeners.forEach((unlisten) => unlisten()));
     };
-  }, [fetchCurrentAccount, fetchAccounts, loadConfig]);
+  }, [fetchAccounts, fetchActiveClients, loadConfig]);
 
   // 启动 4 秒后静默检查一次更新
   useEffect(() => {

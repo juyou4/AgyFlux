@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
-const RELEASE_ROOT: &str = "https://github.com/anglee0323/agy-switch/releases/tag/";
-const API_URL: &str = "https://api.github.com/repos/anglee0323/agy-switch/releases/latest";
+const RELEASE_ROOT: &str = "https://github.com/juyou4/AgyFlux/releases/tag/";
+const API_URL: &str = "https://api.github.com/repos/juyou4/AgyFlux/releases/latest";
 
-// 独立版本尚未配置自己的发布仓库与签名，禁止使用上游安装包覆盖当前应用。
+// 尚未配置自动更新签名发布通道，禁止自动下载安装未签名包。
 const UPDATES_ENABLED: bool = false;
 
 fn require_update_channel() -> Result<(), String> {
@@ -108,7 +108,7 @@ fn trusted_download(version: &str, url: &str) -> bool {
     let platform = if cfg!(target_os = "macos") { "macos-arm64.app.tar.gz" }
         else if cfg!(target_os = "windows") { "windows-x64-setup.exe" }
         else { "linux-amd64.deb" };
-    url == format!("https://github.com/anglee0323/agy-switch/releases/download/v{version}/agy-switch-{version}-{platform}")
+    url == format!("https://github.com/juyou4/AgyFlux/releases/download/v{version}/agyflux-{version}-{platform}")
 }
 
 /// Only a user-triggered command can download and install. The caller supplies no URL or path.
@@ -246,10 +246,10 @@ mod download_tests {
     #[test]
     fn updater_payload_is_pinned_to_repository_version_and_platform() {
         let suffix = if cfg!(target_os = "macos") { "macos-arm64.app.tar.gz" } else if cfg!(target_os = "windows") { "windows-x64-setup.exe" } else { "linux-amd64.deb" };
-        let valid = format!("https://github.com/anglee0323/agy-switch/releases/download/v4.9.0/agy-switch-4.9.0-{suffix}");
-        assert!(trusted_download("4.9.0", &valid));
-        for changed in [valid.replace("anglee0323", "attacker"), valid.replace("v4.9.0", "v4.8.1"), format!("{valid}?redirect=evil"), valid.replace("https:", "http:"), "file:///tmp/update".into()] { assert!(!trusted_download("4.9.0", &changed)); }
-        assert!(!trusted_download("4.9.0/path", &valid));
+        let valid = format!("https://github.com/juyou4/AgyFlux/releases/download/v1.1.0/agyflux-1.1.0-{suffix}");
+        assert!(trusted_download("1.1.0", &valid));
+        for changed in [valid.replace("juyou4", "attacker"), valid.replace("v1.1.0", "v1.0.0"), format!("{valid}?redirect=evil"), valid.replace("https:", "http:"), "file:///tmp/update".into()] { assert!(!trusted_download("1.1.0", &changed)); }
+        assert!(!trusted_download("1.1.0/path", &valid));
     }
 }
 
@@ -290,10 +290,10 @@ mod signature_metadata_tests {
     use base64::Engine;
     #[test]
     fn signed_filename_cannot_relabel_an_older_or_different_platform_package() {
-        let url = url::Url::parse("https://github.com/anglee0323/agy-switch/releases/download/v4.9.0/agy-switch-4.9.0-windows-x64-setup.exe").unwrap();
+        let url = url::Url::parse("https://github.com/juyou4/AgyFlux/releases/download/v1.1.0/agyflux-1.1.0-windows-x64-setup.exe").unwrap();
         let signed_comment = |filename: &str| base64::engine::general_purpose::STANDARD.encode(format!("untrusted comment: fixture\nfixture\ntrusted comment: timestamp:1\tfile:{filename}\nfixture\n"));
-        assert!(signed_filename_matches(&signed_comment("agy-switch-4.9.0-windows-x64-setup.exe"), &url));
-        for filename in ["agy-switch-4.8.1-windows-x64-setup.exe", "agy-switch-4.9.0-linux-amd64.deb", "agy-switch-4.9.0-windows-x64-setup.exe\tfile:other"] {
+        assert!(signed_filename_matches(&signed_comment("agyflux-1.1.0-windows-x64-setup.exe"), &url));
+        for filename in ["agyflux-1.0.0-windows-x64-setup.exe", "agyflux-1.1.0-linux-amd64.deb", "agyflux-1.1.0-windows-x64-setup.exe\tfile:other"] {
             assert!(!signed_filename_matches(&signed_comment(filename), &url));
         }
         assert!(!signed_filename_matches("invalid-base64", &url));

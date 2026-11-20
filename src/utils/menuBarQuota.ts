@@ -1,6 +1,37 @@
 import type { Account, QuotaData, ModelQuota } from "../types/account";
 import { quotaPoolKind, type QuotaPoolKind } from './accountDashboard';
 
+export function selectableQuotaModels(quota?: QuotaData): ModelQuota[] {
+  return quota?.model_catalog_known ? quota.models : [];
+}
+
+export function accountModelQuotaRows(account: Account, window: '5h' | 'weekly') {
+  type Row = ReturnType<typeof modelQuotaForWindow> & {
+    id: string; label: string; levels: string[]; protected: boolean;
+  };
+  const rows = new Map<string, Row>();
+  const protectedIds = new Set(account.protected_models);
+  for (const model of selectableQuotaModels(account.quota)) {
+    const quota = modelQuotaForWindow(model, account.quota, window);
+    const label = model.display_name || model.name;
+    const effort = /^(.*) \((Low|Medium|High|Extra(?: High)?|XHigh)\)$/i.exec(label);
+    const family = /^(.*)-(?:low|medium|high|xhigh)$/i.exec(model.name);
+    const isProtected = protectedIds.has(model.name);
+    // 同一模型只有档位不同，且额度、窗口、重置时间和保护状态相同时才合并展示。
+    const key = effort && family
+      ? JSON.stringify([family[1], effort[1], quota.window, quota.percentage, quota.resetTime, isProtected])
+      : model.name;
+    const existing = rows.get(key);
+    if (existing && effort) {
+      existing.label = effort[1];
+      existing.levels.push(effort[2]);
+    } else {
+      rows.set(key, { ...quota, id: model.name, label, levels: effort ? [effort[2]] : [], protected: isProtected });
+    }
+  }
+  return [...rows.values()];
+}
+
 /** Shared by account cards and tables; preserve dedicated and future pool names. */
 export function weeklyQuotaItems(quota?: QuotaData) {
   return (quota?.quota_groups || []).flatMap(group => group.buckets

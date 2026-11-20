@@ -15,7 +15,6 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import {
-  ArrowsClockwise,
   ArrowsLeftRight,
   CheckCircle,
   CloudArrowDown,
@@ -36,16 +35,17 @@ import * as autoSwitchService from '../services/autoSwitchService';
 import * as configService from '../services/configService';
 import * as updaterService from '../services/updaterService';
 import { SpringSegmentedControl } from '../components/motion/SpringSegmentedControl';
-import { MorphActionButton } from '../components/motion/MorphActionButton';
 import { SpringAccordion } from '../components/motion/SpringAccordion';
 import { DropdownSelector } from '../components/motion/DropdownSelector';
 import { SpringCheckbox } from '../components/motion/SpringCheckbox';
 import { SpringNumberInput } from '../components/motion/SpringNumberInput';
 import { showToast } from '../components/motion/SpringToast';
 import { getAccountTier, type AccountTier } from '../utils/accountTier';
+import { selectableQuotaModels } from '../utils/menuBarQuota';
 import { AccountTierBadge } from '../components/accounts/AccountTierBadge';
+import { AutoSwitchStatusBar } from '../components/accounts/AutoSwitchStatusBar';
 import { isTauri } from '../utils/env';
-import type { AutoSwitchConfig, AutoSwitchStatus, AutoSwitchTarget, AutoSwitchStrategy } from '../types/autoSwitch';
+import type { AutoSwitchConfig, AutoSwitchTarget, AutoSwitchStrategy } from '../types/autoSwitch';
 import {
   DEFAULT_MENU_BAR_PREFERENCES,
   DEFAULT_QUOTA_VALUATION_CONFIG,
@@ -53,18 +53,22 @@ import {
   type MenuBarPreferences,
   type MenuBarQuotaScope,
   type MenuBarResetTimeDisplay,
+  type ProxyMode,
 } from '../types/config';
 
 type SettingsSection = 'auto_switch' | 'client_network' | 'display_valuation' | 'desktop_data';
 
-const COMMON_MODELS = [
-  'gemini-3-pro-high',
-  'gemini-3-flash',
-  'claude-sonnet-4-6',
-  'claude-opus-4-6-thinking',
-  'gemini-4-argon-high',
-  'gemini-4-carbon-high',
-];
+function isValidProxyUrl(raw: string, forClient = false): boolean {
+  try {
+    const value = raw.trim();
+    const url = new URL(value);
+    if (!/^(https?|socks5h?):\/\//i.test(value) || !url.hostname || url.username || url.password) return false;
+    return !forClient || (url.protocol === 'http:' && url.port !== '0' && url.pathname === '/'
+      && !/[\\@?#\s]/.test(value));
+  } catch {
+    return false;
+  }
+}
 
 const PROTECTED_MODEL_KEYS = [
   { key: 'gemini-pro', label: 'Gemini Pro / Ultra' },
@@ -207,15 +211,18 @@ export default function Settings() {
   const [railReady, setRailReady] = useState(false);
 
   const [autoSwitchConfig, setAutoSwitchConfig] = useState<AutoSwitchConfig | null>(null);
-  const [autoSwitchStatus, setAutoSwitchStatus] = useState<AutoSwitchStatus | null>(null);
+  const [savingPolicy, setSavingPolicy] = useState(false);
+  const policySavePending = useRef(false);
+  const candidatePoolRef = useRef<HTMLDivElement>(null);
   const [desktopStatus, setDesktopStatus] = useState<configService.DesktopStatus | null>(null);
   const [experiments, setExperiments] = useState<configService.AppExperimentsStatus | null>(null);
   const [dataDir, setDataDir] = useState<string>('~/.antigravity_tools');
   const [runningVersion, setRunningVersion] = useState<string>('1.0.0');
 
-  const [proxyModeDraft, setProxyModeDraft] = useState<'system' | 'direct' | 'manual'>('system');
+  const [proxyModeDraft, setProxyModeDraft] = useState<ProxyMode>('system');
   const [proxyUrlDraft, setProxyUrlDraft] = useState('');
   const [proxyError, setProxyError] = useState<string | null>(null);
+  const [proxyBusy, setProxyBusy] = useState(false);
   const proxyInputRef = useRef<HTMLInputElement>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -270,24 +277,22 @@ export default function Settings() {
 
   const bootstrap = useCallback(async () => {
     await Promise.all([
-      !config ? loadConfig() : Promise.resolve(),
-      !accounts.length ? fetchAccounts() : Promise.resolve(),
+      !useConfigStore.getState().config ? loadConfig() : Promise.resolve(),
+      !useAccountStore.getState().hasLoadedAccounts ? fetchAccounts() : Promise.resolve(),
     ]);
-    const [asCfg, asSt, ds, exp, dir, ver] = await Promise.all([
+    const [asCfg, ds, exp, dir, ver] = await Promise.all([
       autoSwitchService.getAutoSwitchConfig().catch(() => null),
-      autoSwitchService.getAutoSwitchStatus().catch(() => null),
       configService.getDesktopSettings().catch(() => null),
       configService.getAppExperiments().catch(() => null),
       configService.getDataDirPath().catch(() => null),
       updaterService.getRunningVersion().catch(() => null),
     ]);
     if (asCfg) setAutoSwitchConfig(asCfg);
-    if (asSt) setAutoSwitchStatus(asSt);
     if (ds) setDesktopStatus(ds);
     if (exp) setExperiments(exp);
     if (dir) setDataDir(dir);
     if (ver) setRunningVersion(ver);
-  }, [config, loadConfig, accounts.length, fetchAccounts]);
+  }, [loadConfig, fetchAccounts]);
 
   useEffect(() => {
     void bootstrap();
@@ -311,16 +316,41 @@ export default function Settings() {
     }
   };
 
+  const promptForCandidate = () => {
+    showToast(accounts.length
+      ? (zh ? '先勾选至少一个候选账号，再开启自动切换。' : 'Select at least one backup account before enabling auto-switch.')
+      : (zh ? '先在账号页添加账号，再设置自动切换。' : 'Add an account on the Accounts page first.'), 'info');
+    candidatePoolRef.current?.focus({ preventScroll: true });
+    candidatePoolRef.current?.scrollIntoView({ block: 'center' });
+  };
+
   const persistAutoSwitch = async (next: AutoSwitchConfig, toastText?: string) => {
-    setAutoSwitchConfig(next);
+    if (policySavePending.current) return;
+    if (next.enabled && !next.candidate_account_ids.length) {
+      promptForCandidate();
+      return;
+    }
+    policySavePending.current = true;
+    setSavingPolicy(true);
     try {
-      const saved = await autoSwitchService.setAutoSwitchConfig(next);
+      const saved = await autoSwitchService.setAutoSwitchConfig(next, autoSwitchConfig);
       setAutoSwitchConfig(saved);
-      const st = await autoSwitchService.getAutoSwitchStatus().catch(() => null);
-      if (st) setAutoSwitchStatus(st);
       if (toastText) showToast(toastText, 'success');
     } catch (e) {
-      showToast(String(e), 'error');
+      const [current] = await Promise.all([
+        autoSwitchService.getAutoSwitchConfig().catch(() => null),
+        fetchAccounts(),
+      ]);
+      if (current) setAutoSwitchConfig(current);
+      if (String(e) === 'auto_switch_no_candidates') promptForCandidate();
+      else if (String(e) === 'auto_switch_settings_changed')
+        showToast(zh ? '设置已在其他窗口更新，请重新选择。' : 'Settings changed in another window. Please choose again.', 'info');
+      else if (String(e) === 'account_index_unavailable')
+        showToast(zh ? '暂时无法读取账号列表，请稍后重试。' : 'The account list could not be read. Please try again.', 'error');
+      else showToast(String(e), 'error');
+    } finally {
+      policySavePending.current = false;
+      setSavingPolicy(false);
     }
   };
 
@@ -335,14 +365,20 @@ export default function Settings() {
   }, [accounts, autoSwitchConfig?.candidate_account_ids]);
 
   const modelOptions = useMemo(() => {
-    const set = new Set<string>(COMMON_MODELS);
+    const labels = new Map<string, string>([
+      ['all', zh ? '全部模型' : 'All models'], ['gemini', 'Gemini'], ['claude', 'Claude / GPT'],
+    ]);
     for (const acc of accounts) {
-      for (const m of acc.quota?.models || []) {
-        if (m.name) set.add(m.name);
+      for (const model of selectableQuotaModels(acc.quota)) {
+        if (!labels.has(model.name)) labels.set(model.name, model.display_name || model.name);
       }
     }
-    return [...set];
-  }, [accounts]);
+    const current = autoSwitchConfig?.monitored_model;
+    if (current && !labels.has(current)) {
+      labels.set(current, zh ? '原选模型（当前未确认可用）' : 'Previous model (availability unconfirmed)');
+    }
+    return Array.from(labels, ([value, label]) => ({ value, label }));
+  }, [accounts, autoSwitchConfig?.monitored_model, zh]);
 
   const handleCandidateDragEnd = async (event: DragEndEvent) => {
     if (!autoSwitchConfig) return;
@@ -366,7 +402,9 @@ export default function Settings() {
       : orderedCandidateAccounts
           .map((a) => a.id)
           .filter((id) => id === accountId || autoSwitchConfig.candidate_account_ids.includes(id));
-    await persistAutoSwitch({ ...autoSwitchConfig, candidate_account_ids: nextIds });
+    const turnOff = autoSwitchConfig.enabled && !nextIds.length;
+    await persistAutoSwitch({ ...autoSwitchConfig, enabled: autoSwitchConfig.enabled && !turnOff, candidate_account_ids: nextIds },
+      turnOff ? (zh ? '已移除最后一个候选账号，自动切换已关闭。' : 'Auto-switch turned off after the last backup was removed.') : undefined);
   };
 
   const handleBrowseExecutable = async (field: 'antigravity_executable' | 'antigravity_ide_executable') => {
@@ -389,45 +427,62 @@ export default function Settings() {
     }
   };
 
-  const isValidProxyUrl = (raw: string) => /^(https?|socks5h?):\/\/.+/i.test(raw.trim());
+  const clientProxyEnabled = config?.network?.proxy_mode === 'manual' && !!config.network.proxy_antigravity;
 
-  const handleProxyModeChange = async (mode: 'system' | 'direct' | 'manual') => {
-    if (!config) return;
-    setProxyModeDraft(mode);
-    setProxyError(null);
-    const trimmed = proxyUrlDraft.trim();
-    if (mode === 'manual') {
-      if (isValidProxyUrl(trimmed)) {
-        await persistConfig(
-          { ...config, network: { proxy_mode: 'manual', proxy_url: trimmed } },
-          zh ? '网络代理设置已保存' : 'Network proxy saved'
-        );
-      } else {
-        window.setTimeout(() => proxyInputRef.current?.focus(), 120);
-      }
+  const handleProxySave = async (mode: ProxyMode, url = proxyUrlDraft, share = mode === 'manual' && clientProxyEnabled) => {
+    if (!config || proxyBusy) return;
+    const trimmed = url.trim();
+    if (mode === 'manual' && !isValidProxyUrl(trimmed, share)) {
+      setProxyError(share
+        ? (zh ? '免 TUN 需要 HTTP 或混合端口，例如 http://127.0.0.1:7890' : 'Enter the HTTP or mixed port, e.g. http://127.0.0.1:7890')
+        : (zh ? '请输入有效的 HTTP 或 SOCKS 代理地址' : 'Enter a valid HTTP or SOCKS proxy URL'));
+      proxyInputRef.current?.focus();
       return;
     }
-    await persistConfig(
-      { ...config, network: { proxy_mode: mode, proxy_url: trimmed } },
-      zh ? '网络代理设置已保存' : 'Network proxy saved'
-    );
+    setProxyError(null);
+    setProxyBusy(true);
+    try {
+      await saveConfig({ ...config, network: { proxy_mode: mode, proxy_url: trimmed, proxy_antigravity: share } }, true);
+      showToast(zh ? '网络代理设置已保存' : 'Network proxy saved', 'success');
+    } catch (e) {
+      if (mode !== 'manual') setProxyModeDraft(config.network?.proxy_mode ?? 'system');
+      setProxyError(String(e));
+    } finally {
+      setProxyBusy(false);
+    }
   };
 
-  const handleProxySave = async (mode: 'system' | 'direct' | 'manual', url = proxyUrlDraft) => {
-    if (!config) return;
-    const trimmed = url.trim();
-    if (mode === 'manual') {
-      if (!isValidProxyUrl(trimmed)) {
-        setProxyError(zh ? '请输入有效的代理地址（如 http://127.0.0.1:7890 或 socks5://...）' : 'Enter a valid http:// or socks5:// URL');
-        return;
-      }
-    }
+  const handleProxyModeChange = (mode: ProxyMode) => {
+    if (proxyBusy) return;
     setProxyModeDraft(mode);
     setProxyError(null);
-    await persistConfig(
-      { ...config, network: { proxy_mode: mode, proxy_url: trimmed } },
-      zh ? '网络代理设置已保存' : 'Network proxy saved'
-    );
+    if (mode === 'manual' && !isValidProxyUrl(proxyUrlDraft)) {
+      window.setTimeout(() => proxyInputRef.current?.focus(), 120);
+      return;
+    }
+    void handleProxySave(mode);
+  };
+
+  const handleLaunchClient = async () => {
+    if (proxyBusy) return;
+    setProxyBusy(true);
+    setProxyError(null);
+    try {
+      await configService.launchAntigravityWithProxy();
+      showToast(zh ? '正在启动 Antigravity' : 'Starting Antigravity', 'success');
+    } catch (e) {
+      const message = String(e);
+      if (message === 'client_proxy_app_running') {
+        showToast(zh ? 'Antigravity 桌面端正在运行。退出后再点一次「启动 Antigravity」。'
+          : 'Antigravity is running. Quit the desktop app, then click Launch Antigravity again.', 'info');
+      } else if (message === 'client_proxy_off') {
+        setProxyError(zh ? '请先开启 Antigravity 免 TUN。' : 'Enable the Antigravity client proxy first.');
+      } else {
+        setProxyError(message);
+      }
+    } finally {
+      setProxyBusy(false);
+    }
   };
 
   const handleDesktopPatch = async (patch: {
@@ -521,7 +576,7 @@ export default function Settings() {
         {/* Right Content Area */}
         <div key={activeSection} className="mk-capsule-switch min-w-0 flex-1 space-y-5">
           {activeSection === 'auto_switch' && autoSwitchConfig && (
-            <>
+            <fieldset disabled={savingPolicy} aria-busy={savingPolicy} className="min-w-0">
               <SectionCard
                 title={zh ? '自动切换' : 'Auto-Switch'}
                 subtitle={
@@ -532,7 +587,7 @@ export default function Settings() {
                 right={
                   <Toggle
                     checked={autoSwitchConfig.enabled}
-                    label="Enable auto-switch"
+                    label={zh ? '开启自动切换' : 'Enable auto-switch'}
                     onChange={(enabled) =>
                       void persistAutoSwitch(
                         { ...autoSwitchConfig, enabled },
@@ -543,87 +598,7 @@ export default function Settings() {
                 }
               >
                 <div className="space-y-4">
-                  {/* Live Status Pill */}
-                  {autoSwitchStatus && (
-                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-[18px] bg-[var(--surface-soft)] px-4 py-3 text-xs">
-                      <div className="flex flex-wrap items-center gap-2">
-                        {autoSwitchStatus.phase === 'monitoring' ? (
-                          <span className="relative flex h-2.5 w-2.5 items-center justify-center">
-                            <span className="status-ping-ring absolute inset-0 rounded-full bg-[var(--emerald)]" />
-                            <span className="relative h-2 w-2 rounded-full bg-[var(--emerald)]" />
-                          </span>
-                        ) : (
-                          <span
-                            className={`inline-block h-2 w-2 rounded-full ${
-                              autoSwitchStatus.phase === 'pending' || autoSwitchStatus.phase === 'switching'
-                                ? 'bg-[var(--amber)] animate-pulse'
-                                : autoSwitchStatus.phase === 'blocked'
-                                  ? 'bg-[var(--rose)]'
-                                  : 'bg-[var(--ink-muted)]'
-                            }`}
-                          />
-                        )}
-                        <span className="font-semibold text-[var(--ink)]">
-                          {zh
-                            ? (({
-                                disabled: '已停用',
-                                monitoring: '监控中',
-                                pending: '等待切换',
-                                switching: '切换中',
-                                blocked: '已暂停',
-                                idle: '空闲',
-                                canceled: '已取消',
-                                completed: '已完成',
-                              } as Record<string, string>)[autoSwitchStatus.phase] ?? autoSwitchStatus.phase)
-                            : `Phase: ${autoSwitchStatus.phase}`}
-                        </span>
-                        <span className="text-[var(--ink-secondary)]">
-                          {zh
-                            ? `· 客户端${
-                                (({
-                                  running: '运行中',
-                                  idle: '空闲',
-                                  stopped: '未运行',
-                                  closed: '未运行',
-                                  unknown: '未知',
-                                } as Record<string, string>)[autoSwitchStatus.process_state] ?? autoSwitchStatus.process_state)
-                              }`
-                            : `(Process: ${autoSwitchStatus.process_state})`}
-                        </span>
-                        {autoSwitchStatus.reason && (
-                          <span className="text-[var(--ink-muted)]">· {autoSwitchStatus.reason}</span>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        {autoSwitchStatus.pending_id && (
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              const st = await autoSwitchService.cancelAutoSwitch(autoSwitchStatus.pending_id!);
-                              setAutoSwitchStatus(st);
-                              showToast(zh ? '已取消待执行切换' : 'Pending switch canceled', 'info');
-                            }}
-                            className="tactile-press rounded-full bg-[var(--rose-soft)] px-3 py-1 text-[11px] font-semibold text-[var(--rose-ink)]"
-                          >
-                            {zh ? '取消待切换' : 'Cancel Pending'}
-                          </button>
-                        )}
-                        <MorphActionButton
-                          variant="secondary"
-                          size="sm"
-                          idleLabel={zh ? '立即检查' : 'Check Now'}
-                          loadingLabel={zh ? '检查中' : 'Checking'}
-                          successLabel={zh ? '已检查' : 'Checked'}
-                          icon={<ArrowsClockwise size={13} weight="bold" />}
-                          onClick={async () => {
-                            const st = await autoSwitchService.checkAutoSwitchNow();
-                            setAutoSwitchStatus(st);
-                          }}
-                        />
-                      </div>
-                    </div>
-                  )}
+                  <AutoSwitchStatusBar config={autoSwitchConfig} />
 
                   {/* Mode & Strategy */}
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -708,7 +683,7 @@ export default function Settings() {
                         onChange={(monitored_model) =>
                           void persistAutoSwitch({ ...autoSwitchConfig, monitored_model })
                         }
-                        options={modelOptions.map((m) => ({ value: m, label: m }))}
+                        options={modelOptions}
                       />
                     </div>
 
@@ -748,7 +723,7 @@ export default function Settings() {
                   </div>
 
                   {/* Candidate Pool Sortable Checklist */}
-                  <div>
+                  <div ref={candidatePoolRef} tabIndex={-1}>
                     <div className="mb-2 flex items-center justify-between text-xs">
                       <span className="font-medium text-[var(--ink-secondary)]">
                         {zh ? '候选账号（勾选加入，拖拽排序）' : 'Candidate Pool (check & drag to order)'}
@@ -787,7 +762,7 @@ export default function Settings() {
                   </div>
                 </div>
               </SectionCard>
-            </>
+            </fieldset>
           )}
 
           {activeSection === 'client_network' && config && (
@@ -852,13 +827,13 @@ export default function Settings() {
 
               {/* Network Proxy */}
               <SectionCard
-                title={zh ? '网络代理' : 'Network Proxy'}
+                title={zh ? '网络代理' : 'Network proxy'}
                 subtitle={zh ? '用于刷新配额和账号登录' : 'Outbound mode for quota checks, OAuth & warmup requests'}
               >
-                <div className="space-y-3">
+                <fieldset className="min-w-0 space-y-3" disabled={proxyBusy}>
                   <SpringSegmentedControl
                     value={proxyModeDraft}
-                    onChange={(proxy_mode) => void handleProxyModeChange(proxy_mode)}
+                    onChange={handleProxyModeChange}
                     options={[
                       { value: 'system', label: zh ? '跟随系统' : 'System' },
                       { value: 'direct', label: zh ? '直连' : 'Direct' },
@@ -872,6 +847,7 @@ export default function Settings() {
                         <input
                           ref={proxyInputRef}
                           type="text"
+                          aria-label={zh ? '代理地址' : 'Proxy URL'}
                           value={proxyUrlDraft}
                           onChange={(e) => {
                             setProxyUrlDraft(e.target.value);
@@ -893,10 +869,32 @@ export default function Settings() {
                           {zh ? '应用' : 'Apply'}
                         </button>
                       </div>
-                      {proxyError && <p className="mt-1.5 text-[11px] text-[var(--rose-ink)]">{proxyError}</p>}
+                      {desktopStatus?.platform === 'windows' && (
+                        <div className="mt-4 space-y-2">
+                          <div className="flex items-center justify-between gap-4">
+                            <div>
+                              <p className="text-xs font-semibold">{zh ? 'Antigravity 免 TUN' : 'Antigravity without TUN'}</p>
+                              <p className="mt-0.5 text-xs text-[var(--ink-secondary)]">
+                                {zh ? '从 AgyFlux 启动或切号重启时，客户端和后台服务共用此 HTTP / 混合代理。'
+                                  : 'The app and its background service use this HTTP proxy when AgyFlux launches it or restarts it after an account switch.'}
+                              </p>
+                            </div>
+                            <Toggle checked={clientProxyEnabled} label={zh ? 'Antigravity 免 TUN' : 'Antigravity without TUN'}
+                              onChange={(enable) => void handleProxySave('manual', enable ? proxyUrlDraft : config.network?.proxy_url, enable)} />
+                          </div>
+                          {clientProxyEnabled && (
+                            <button type="button" onClick={() => void handleLaunchClient()}
+                              disabled={!isTauri() || proxyUrlDraft.trim() !== config.network?.proxy_url}
+                              className="tactile-press rounded-full border border-[var(--border)] px-4 py-2 text-xs font-semibold disabled:opacity-45">
+                              {zh ? '启动 Antigravity' : 'Launch Antigravity'}
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </SpringAccordion>
-                </div>
+                  {proxyError && <p role="alert" className="text-xs text-[var(--rose-ink)]">{proxyError}</p>}
+                </fieldset>
               </SectionCard>
 
               {/* Refresh Intervals & Quota Protection */}
@@ -939,16 +937,16 @@ export default function Settings() {
                           {zh ? '同步登录状态' : 'Auto Sync Active Client'}
                         </div>
                         <div className="text-[11px] text-[var(--ink-muted)]">
-                          {zh ? '检测间隔（秒）' : 'Poll local credentials every N sec'}
+                          {zh ? '检测间隔（分钟）' : 'Poll local credentials every N min'}
                         </div>
                       </div>
                       <div className="flex items-center gap-2.5">
                         <SpringNumberInput
                           ariaLabel={zh ? '自动同步间隔' : 'Auto sync interval'}
-                          min={5}
-                          max={3600}
-                          step={5}
-                          suffix="s"
+                          min={1}
+                          max={60}
+                          step={1}
+                          suffix="m"
                           className="w-[132px]"
                           value={config.sync_interval}
                           onChange={(sync_interval) => void persistConfig({ ...config, sync_interval })}

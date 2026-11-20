@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowsClockwise,
   ArrowsLeftRight,
@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useAccountStore } from '../stores/useAccountStore';
 import { useConfigStore } from '../stores/useConfigStore';
+import { reconcileAppSignIn } from '../services/accountService';
 import { getAccountTier } from '../utils/accountTier';
 import { AccountTierBadge } from '../components/accounts/AccountTierBadge';
 import {
@@ -167,6 +168,8 @@ export default function Overview() {
   const [refreshWaveKey, setRefreshWaveKey] = useState(0);
   const [usage, setUsage] = useState<LocalTokenUsageSummary | null>(null);
   const [pricing, setPricing] = useState<ApiPricingSnapshot | null>(null);
+  const [appSignInBusy, setAppSignInBusy] = useState(false);
+  const switchingRef = useRef(false);
 
   const loadTelemetry = useCallback(async () => {
     try {
@@ -188,6 +191,7 @@ export default function Overview() {
 
   const activeIdentity = clientIdentity(activeClients, clientTab);
   const activeClientId = activeIdentity.accountId;
+  const canSyncAppSignIn = clientTab === 'classic' && activeIdentity.unmatchedSignIn;
 
   const activeAccount = useMemo(
     () => accounts.find((a) => a.id === activeClientId) || null,
@@ -249,14 +253,62 @@ export default function Overview() {
   }, [usage, usageRange, pricing, config?.quota_valuation]);
 
   const handleSwitchTarget = async (accountId: string) => {
+    if (switchingRef.current) {
+      throw new Error(zh ? '正在切换账号，请稍候' : 'An account switch is already in progress');
+    }
+    switchingRef.current = true;
     const target = clientTab === 'classic' ? 'app' : clientTab;
-    await switchAccount(accountId, target);
-    const email = accounts.find((a) => a.id === accountId)?.email ?? '';
-    const clientName = clientTab === 'classic' ? 'App' : clientTab === 'ide' ? 'IDE' : 'CLI';
-    showToast(
-      zh ? `${clientName} 已切换到 ${email}` : `Switched ${clientName} to ${email}`,
-      'success'
-    );
+    try {
+      await switchAccount(accountId, target);
+      const email = accounts.find((a) => a.id === accountId)?.email ?? '';
+      const clientName = clientTab === 'classic' ? 'App' : clientTab === 'ide' ? 'IDE' : 'CLI';
+      showToast(
+        zh ? `${clientName} 已切换到 ${email}` : `Switched ${clientName} to ${email}`,
+        'success'
+      );
+    } catch (error) {
+      const raw = String(error);
+      const friendly = raw.includes('another_account_switch_in_progress')
+        ? (zh ? '已有账号操作正在进行，请稍后重试。' : 'Another account operation is in progress.')
+        : raw.includes('oauth_client_not_configured')
+          ? (zh ? '未配置本地 Google OAuth 客户端，请先配置 google-oauth.json 或环境变量。' : 'Local Google OAuth client is not configured.')
+          : raw;
+      showToast(friendly, 'error');
+      throw error;
+    } finally {
+      switchingRef.current = false;
+    }
+  };
+
+  const handleSyncAppSignIn = async () => {
+    if (appSignInBusy) return;
+    setAppSignInBusy(true);
+    try {
+      await reconcileAppSignIn();
+      await fetchAccounts();
+      const identity = clientIdentity(useAccountStore.getState().activeClients, 'classic');
+      if (identity.accountId) {
+        showToast(zh ? '已匹配 App 登录账号' : 'App sign-in matched', 'success');
+      } else {
+        showToast(zh ? '同步后仍未匹配 App 登录，请检查 Antigravity 中的账号。'
+          : 'The App sign-in is still unmatched. Check the account in Antigravity.', 'info');
+      }
+    } catch (error) {
+      const messages: Record<string, string> = {
+        app_sign_in_unavailable: zh ? '暂时读不到 App 的本机登录。' : 'The App sign-in is currently unavailable.',
+        app_sign_in_changed: zh ? 'App 登录状态已变化，请重试。' : 'The App sign-in changed. Try again.',
+        app_sign_in_ambiguous: zh ? '本机登录匹配多条记录，请在账号列表中核对。'
+          : 'The local sign-in matches multiple records. Check the Accounts list.',
+        app_sign_in_oauth_unavailable: zh ? 'AgyFlux 尚未配置用于验证的 Google OAuth 客户端。'
+          : 'AgyFlux needs a Google OAuth client to verify this sign-in.',
+        another_account_switch_in_progress: zh ? '已有账号操作正在进行，请稍后重试。'
+          : 'Another account operation is in progress. Try again shortly.',
+      };
+      showToast(messages[String(error)] ?? (zh ? '同步失败，请检查 Google 登录和代理连接。'
+        : 'Sign-in sync failed. Check your Google sign-in and proxy connection.'), 'error');
+    } finally {
+      setAppSignInBusy(false);
+    }
   };
 
   const activeGemini5h = activeAccount ? extractPoolWindow(activeAccount, 'gemini', '5h') : null;
@@ -279,14 +331,16 @@ export default function Overview() {
                 {activeIdentity.source === 'running_app' && (
                   <span className="status-ping-ring absolute inset-0 rounded-full bg-[var(--emerald)]" />
                 )}
-                <span className={`relative h-2 w-2 rounded-full ${activeIdentity.source === 'unavailable' ? 'bg-[var(--ink-muted)]' : 'bg-[var(--emerald)]'}`} />
+                <span className={`relative h-2 w-2 rounded-full ${activeIdentity.source === 'unavailable' || activeIdentity.unmatchedSignIn ? 'bg-[var(--ink-muted)]' : 'bg-[var(--emerald)]'}`} />
               </span>
               <h2 className="text-sm font-semibold text-[var(--ink)]">
                 {activeIdentity.source === 'running_app'
                   ? (zh ? '当前运行账号' : 'Running Account')
-                  : activeIdentity.source === 'credentials'
-                    ? (zh ? '已保存登录账号' : 'Saved Sign-in')
-                    : (zh ? '客户端账号未确认' : 'Account Unconfirmed')}
+                  : activeIdentity.unmatchedSignIn
+                    ? (zh ? '本机登录待匹配' : 'Local Sign-in Unmatched')
+                    : activeIdentity.source === 'credentials'
+                      ? (zh ? '已保存登录账号' : 'Saved Sign-in')
+                      : (zh ? '客户端账号未确认' : 'Account Unconfirmed')}
               </h2>
             </div>
 
@@ -442,19 +496,25 @@ export default function Overview() {
               </WaveRevealContainer>
             </div>
           ) : (
-            <div key={clientTab} className="mk-capsule-switch mt-6 flex items-center justify-between rounded-[20px] bg-[var(--surface-soft)] p-4 text-xs text-[var(--ink-muted)]">
+            <div key={clientTab} className="mk-capsule-switch mt-6 flex flex-wrap items-center justify-between gap-3 rounded-[20px] bg-[var(--surface-soft)] p-4 text-xs text-[var(--ink-muted)]">
               <span>
                 {activeIdentity.email
                   ? (zh ? `检测到 ${activeIdentity.email}，尚未导入账号列表` : `${activeIdentity.email} detected; not yet imported`)
-                  : (zh ? '暂时无法确认此客户端的账号' : 'Unable to confirm this client’s account')}
+                  : activeIdentity.unmatchedSignIn
+                    ? (zh ? '已读到本机登录，尚未匹配账号库。' : 'The local sign-in has no confirmed match in Accounts.')
+                    : (zh ? '暂时无法确认此客户端的账号' : 'Unable to confirm this client’s account')}
               </span>
-              <button
-                type="button"
-                onClick={() => navigate('/accounts')}
-                className="font-semibold text-[var(--ink)] hover:underline"
-              >
-                {zh ? '前往账号列表 →' : 'Go to Accounts →'}
-              </button>
+              <div className="flex flex-wrap items-center gap-3">
+                {canSyncAppSignIn && (
+                  <button type="button" onClick={() => void handleSyncAppSignIn()} disabled={appSignInBusy}
+                    className="tactile-press rounded-full border border-[var(--primary-border)] bg-[var(--primary-soft)] px-3 py-1.5 font-semibold text-[var(--primary-ink)] disabled:opacity-50">
+                    {appSignInBusy ? (zh ? '正在同步…' : 'Syncing…') : (zh ? '同步 App 登录' : 'Sync App Sign-in')}
+                  </button>
+                )}
+                <button type="button" onClick={() => navigate('/accounts')} className="font-semibold text-[var(--ink)] hover:underline">
+                  {zh ? '前往账号列表 →' : 'Go to Accounts →'}
+                </button>
+              </div>
             </div>
           )}
         </section>

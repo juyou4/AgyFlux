@@ -27,7 +27,7 @@ pub struct Account {
     pub id: String,
     pub email: String,
     pub name: Option<String>,
-    /// 优先级 (1-100，数值越小越靠前，兼容 Antigravity-Manager)
+    /// 优先级 (1-100，数值越小越靠前)
     #[serde(
         default = "default_priority",
         deserialize_with = "deserialize_priority"

@@ -2,8 +2,7 @@
   "bundle": {
     "resources": {
       "target/release/agyflux.exe": "agyflux.exe",
-      "../LICENSE": "LICENSE",
-      "../third-party/cc-switch.LICENSE": "third-party/cc-switch.LICENSE"
+      "../LICENSE": "LICENSE"
     }
   }
 }

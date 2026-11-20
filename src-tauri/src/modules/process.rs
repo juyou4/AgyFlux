@@ -6,6 +6,12 @@ use sysinfo::System;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
+#[cfg(windows)]
+mod windows_app;
+
+#[cfg(all(windows, test))]
+mod windows_launch_tests;
+
 /// Get normalized path of the current running executable
 fn get_current_exe_path() -> Option<std::path::PathBuf> {
     std::env::current_exe()
@@ -49,6 +55,10 @@ fn get_ide_exe_paths(system: &System) -> std::collections::HashSet<String> {
 
 /// Check if Antigravity is running
 pub fn is_antigravity_running(target_ide: Option<&str>) -> bool {
+    #[cfg(windows)]
+    if target_ide != Some("ide") {
+        return !windows_app::main_processes().is_empty();
+    }
     let mut system = System::new();
     system.refresh_processes(sysinfo::ProcessesToUpdate::All);
     let ide_exe_paths = get_ide_exe_paths(&system);
@@ -242,6 +252,10 @@ fn get_self_family_pids(system: &sysinfo::System) -> std::collections::HashSet<u
 
 /// Get PIDs of all Antigravity processes (including main and helper processes)
 fn get_antigravity_pids(target_ide: Option<&str>) -> Vec<u32> {
+    #[cfg(windows)]
+    if target_ide != Some("ide") {
+        return windows_app::main_processes().into_iter().map(|p| p.pid).collect();
+    }
     let mut system = System::new();
     system.refresh_processes(sysinfo::ProcessesToUpdate::All);
     let ide_exe_paths = get_ide_exe_paths(&system);
@@ -464,12 +478,24 @@ pub fn close_antigravity(timeout_secs: u64, target_ide: Option<&str>) -> Result<
         let pids = get_antigravity_pids(target_ide);
         if !pids.is_empty() {
             let started = std::time::Instant::now();
-            let deadline = started + Duration::from_millis(timeout_secs.saturating_mul(700));
+            let posted = match windows_close::request_windows_close(&pids) {
+                Ok(count) => count,
+                Err(error) => {
+                    crate::modules::logger::log_warn(&error);
+                    0
+                }
+            };
+            // 若未匹配到任何可见窗口（如最小化到托盘或无窗口驻留），缩短优雅等待时间，避免切号卡顿 14 秒。
+            let grace_ms = if posted == 0 {
+                timeout_secs.saturating_mul(700).min(1500)
+            } else {
+                timeout_secs.saturating_mul(700)
+            };
+            let deadline = started + Duration::from_millis(grace_ms);
             let hard_deadline = started + Duration::from_millis(timeout_secs.saturating_mul(1000));
-            if let Err(error) = windows_close::request_windows_close(&pids) {
-                crate::modules::logger::log_warn(&error);
-            }
+            let mut forced = false;
             if !wait_until_stopped(deadline, || is_antigravity_running(target_ide)) {
+                forced = true;
                 let remaining = get_antigravity_pids(target_ide);
                 crate::modules::logger::log_warn(&format!(
                     "Antigravity did not close normally; force-closing {} remaining processes on Windows...",
@@ -482,6 +508,28 @@ pub fn close_antigravity(timeout_secs: u64, target_ide: Option<&str>) -> Result<
                         .output();
                 }
                 wait_until_stopped(hard_deadline, || is_antigravity_running(target_ide));
+            }
+
+            // 等待同可执行文件的 Electron 子进程（--type=utility 等）退出，确保 state.vscdb / storage.json 释放文件锁；
+            // 严格排除 ELECTRON_RUN_AS_NODE / sidecar worker。
+            if target_ide != Some("ide") {
+                let child_deadline = std::time::Instant::now() + Duration::from_secs(3);
+                if !wait_until_stopped(child_deadline, || {
+                    !windows_app::electron_child_pids().is_empty()
+                }) && forced
+                {
+                    let stuck_children = windows_app::electron_child_pids();
+                    for pid in stuck_children {
+                        let _ = Command::new("taskkill")
+                            .args(["/F", "/PID", &pid.to_string()])
+                            .creation_flags(0x08000000)
+                            .output();
+                    }
+                    let cleanup_deadline = std::time::Instant::now() + Duration::from_secs(2);
+                    wait_until_stopped(cleanup_deadline, || {
+                        !windows_app::electron_child_pids().is_empty()
+                    });
+                }
             }
         }
     }
@@ -781,7 +829,7 @@ pub fn clean_appimage_env(cmd: &mut Command) {
     }
 }
 
-/// Start Antigravity using the GUI's existing stdio behavior.
+/// 从桌面入口启动 Antigravity。
 pub fn start_antigravity(target_ide: Option<&str>) -> Result<(), String> {
     start_antigravity_with_stdio(target_ide, false)
 }
@@ -792,12 +840,15 @@ pub fn start_antigravity_detached(target_ide: Option<&str>) -> Result<(), String
 }
 
 fn prepare_launch_stdio(command: &mut Command, detached: bool) -> Result<(), String> {
-    if detached {
+    // Windows 桌面客户端可以在启动者退出后继续运行，日志输出不能依赖其终端管道。
+    if detached || cfg!(windows) {
         command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        #[cfg(windows)]
+    }
+    #[cfg(windows)]
+    if detached {
         prevent_cli_pipe_inheritance()?;
     }
     Ok(())
@@ -834,22 +885,49 @@ fn prevent_cli_pipe_inheritance() -> Result<(), String> {
     Ok(())
 }
 
-#[allow(unused_mut)]
 fn start_antigravity_with_stdio(target_ide: Option<&str>, detached: bool) -> Result<(), String> {
+    let config = match crate::modules::config::load_app_config() {
+        Ok(config) => config,
+        #[cfg(windows)]
+        Err(error) if matches!(target_ide, None | Some("app" | "all")) => return Err(error),
+        Err(_) => crate::models::AppConfig::default(),
+    };
+    start_with_config(target_ide, detached, config)
+}
+
+#[allow(unused_mut)]
+pub(super) fn start_with_config(
+    target_ide: Option<&str>,
+    detached: bool,
+    config: crate::models::AppConfig,
+) -> Result<(), String> {
     crate::modules::logger::log_info(&format!("Starting Antigravity ({:?})...", target_ide));
 
     // Prefer manually specified path and args from configuration
-    let config = crate::modules::config::load_app_config().ok();
-    let manual_path = if target_ide == Some("ide") {
-        config
-            .as_ref()
-            .and_then(|c| c.antigravity_ide_executable.clone())
+    let (manual_path, args) = if target_ide == Some("ide") {
+        (config.antigravity_ide_executable, config.antigravity_ide_args)
     } else {
-        config
-            .as_ref()
-            .and_then(|c| c.antigravity_executable.clone())
+        (config.antigravity_executable, config.antigravity_args)
     };
-    let args = config.and_then(|c| if target_ide == Some("ide") { c.antigravity_ide_args } else { c.antigravity_args });
+
+    #[cfg(not(target_os = "macos"))]
+    let spawn_client = |path: &std::path::Path| -> Result<(), String> {
+        let mut cmd = Command::new(path);
+        prepare_launch_stdio(&mut cmd, detached)?;
+        #[cfg(windows)]
+        {
+            super::client_proxy::configure(&mut cmd, args.as_deref().unwrap_or_default(), target_ide, &config.network)?;
+            cmd.creation_flags(0x08000000);
+        }
+        #[cfg(not(windows))]
+        {
+            cmd.args(args.iter().flatten());
+            #[cfg(target_os = "linux")]
+            clean_appimage_env(&mut cmd);
+        }
+        cmd.spawn().map_err(|e| format!("Startup failed ({path:?}): {e}"))?;
+        Ok(())
+    };
 
     if let Some(mut path_str) = manual_path {
         let mut path = std::path::PathBuf::from(&path_str);
@@ -911,29 +989,11 @@ fn start_antigravity_with_stdio(target_ide: Option<&str>, detached: bool) -> Res
             }
 
             #[cfg(not(target_os = "macos"))]
-            {
-                let mut cmd = Command::new(&path_str);
-                prepare_launch_stdio(&mut cmd, detached)?;
-
-                // Add startup arguments
-                if let Some(ref args) = args {
-                    for arg in args {
-                        cmd.arg(arg);
-                    }
-                }
-
-                #[cfg(target_os = "linux")]
-                clean_appimage_env(&mut cmd);
-
-                #[cfg(target_os = "windows")]
-                cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-
-                cmd.spawn().map_err(|e| format!("Startup failed: {}", e))?;
-            }
+            spawn_client(&path)?;
 
             crate::modules::logger::log_info(&format!(
-                "Antigravity startup command sent (manual path: {}, args: {:?})",
-                path_str, args
+                "Antigravity startup command sent (manual path: {})",
+                path_str
             ));
             return Ok(());
         } else {
@@ -980,25 +1040,7 @@ fn start_antigravity_with_stdio(target_ide: Option<&str>, detached: bool) -> Res
     {
         // Windows/Linux Auto-detection and Startup
         if let Some(detected_path) = get_antigravity_executable_path(target_ide) {
-            let mut cmd = Command::new(&detected_path);
-            prepare_launch_stdio(&mut cmd, detached)?;
-
-            // Add startup arguments
-            if let Some(ref args) = args {
-                for arg in args {
-                    cmd.arg(arg);
-                }
-            }
-
-            #[cfg(target_os = "linux")]
-            clean_appimage_env(&mut cmd);
-
-            #[cfg(target_os = "windows")]
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-
-            cmd.spawn().map_err(|e| {
-                format!("Startup failed (detected path {:?}): {}", detected_path, e)
-            })?;
+            spawn_client(&detected_path)?;
 
             crate::modules::logger::log_info(&format!(
                 "Antigravity startup command sent (detected path: {:?})",
@@ -1012,6 +1054,12 @@ fn start_antigravity_with_stdio(target_ide: Option<&str>, detached: bool) -> Res
 }
 
 fn get_process_info(target_ide: Option<&str>) -> (Option<std::path::PathBuf>, Option<Vec<String>>) {
+    #[cfg(windows)]
+    if target_ide != Some("ide") {
+        return windows_app::main_processes().into_iter().find_map(|p| {
+            p.executable.map(|path| (Some(path), Some(p.args)))
+        }).unwrap_or((None, None));
+    }
     let mut system = System::new_all();
     system.refresh_all();
 
@@ -1322,15 +1370,14 @@ fn is_ide_name(value: &str) -> bool {
     value.contains("antigravity ide")
 }
 
-/// AgyFlux 及旧版管理器可能位于含 antigravity 的路径中，不能被当作客户端关闭。
-/// 两个参数都已转换为小写；旧名称继续参与排除，兼容共存的旧版进程。
+/// AgyFlux 可能位于含 antigravity 的路径中，不能被当作客户端关闭。
+/// 两个参数都已转换为小写。
 fn is_switch_process(exe_path: &str, name: &str) -> bool {
     let file = exe_path.rsplit(['/', '\\']).next().unwrap_or(exe_path);
     file.starts_with("agyflux") || name.starts_with("agyflux") || exe_path.contains("agyflux.app")
-        || file.starts_with("agy-switch") || name.starts_with("agy-switch") || exe_path.contains("antigravity switch.app")
 }
 
-/// 模糊识别 Antigravity 客户端，并排除 IDE、AgyFlux 和旧版管理器。
+/// 模糊识别 Antigravity 客户端，并排除 IDE 与 AgyFlux 自身进程。
 fn is_app_candidate(exe_path: &str, name: &str) -> bool {
     (exe_path.contains("antigravity") || name.contains("antigravity"))
         && !is_ide_name(exe_path)
@@ -1346,13 +1393,10 @@ mod app_candidate_tests {
     fn account_managers_are_never_taken_for_the_app() {
         for (path, name) in [
             ("/applications/agyflux.app/contents/macos/agyflux-desktop", "agyflux-desktop"),
-            ("c:\\project\\antigravity-switch\\agyflux-desktop.exe", "agyflux-desktop.exe"),
+            ("/applications/agyflux.app/contents/macos/agyflux", "agyflux"),
+            ("/applications/agyflux.app/contents/resources/anything", "something"),
+            ("c:\\project\\antigravity\\agyflux-desktop.exe", "agyflux-desktop.exe"),
             ("/opt/antigravity/agyflux", "agyflux"),
-            ("/applications/antigravity switch.app/contents/macos/agy-switch-desktop", "agy-switch-desktop"),
-            ("/applications/antigravity switch.app/contents/macos/agy-switch", "agy-switch"),
-            ("/applications/antigravity switch.app/contents/resources/anything", "something"),
-            ("c:\\program files\\antigravity switch\\agy-switch-desktop.exe", "agy-switch-desktop.exe"),
-            ("/usr/bin/agy-switch", "agy-switch"),
         ] {
             assert!(!is_app_candidate(path, name), "{path} 属于账号管理器，不是 Antigravity 客户端");
         }

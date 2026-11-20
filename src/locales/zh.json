@@ -376,7 +376,21 @@
     "retry": "重新读取",
     "load_failed": "无法读取设置或账号，请重试。",
     "save_failed": "保存失败：{{error}}",
-    "status_failed": "无法读取换号状态，请打开设置检查。",
+    "status_failed": "暂时无法读取自动切换状态",
+    "phase": {
+      "disabled": "已停用",
+      "monitoring": "监控中",
+      "blocked": "已暂停",
+      "pending": "等待切换",
+      "switching": "切换中",
+      "canceled": "已取消",
+      "completed": "已完成"
+    },
+    "process": {
+      "running": "客户端进程运行中",
+      "closed": "客户端未运行",
+      "unknown": "暂时无法确认客户端状态"
+    },
     "action_failed": "操作未完成，请刷新状态后重试。",
     "remaining": "当前账号剩余 {{percent}}%",
     "next_account": "备用账号：{{email}}",

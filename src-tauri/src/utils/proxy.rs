@@ -432,6 +432,7 @@ mod tests {
         let mut manual = NetworkPreferences {
             proxy_mode: ProxyMode::Manual,
             proxy_url: "socks5h://127.0.0.1:1080".into(),
+            ..NetworkPreferences::default()
         };
         assert!(manual.validate().is_ok());
         manual.proxy_url = "http://user:secret@localhost:7890".into();

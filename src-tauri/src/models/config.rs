@@ -31,17 +31,41 @@ pub enum ProxyMode { #[default] System, Direct, Manual }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct NetworkPreferences { pub proxy_mode: ProxyMode, pub proxy_url: String }
+pub struct NetworkPreferences {
+    pub proxy_mode: ProxyMode,
+    pub proxy_url: String,
+    pub proxy_antigravity: bool,
+}
+
 impl NetworkPreferences {
     pub fn validate(&self) -> Result<(), String> {
-        if self.proxy_mode == ProxyMode::Manual {
-            let url = url::Url::parse(&self.proxy_url).map_err(|_| "Enter a valid HTTP or SOCKS proxy URL.")?;
-            if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h") || url.host_str().is_none()
-                || !url.username().is_empty() || url.password().is_some() {
-                return Err("Use an HTTP or SOCKS proxy URL without embedded credentials.".into());
-            }
+        self.manual_endpoint().map(|_| ())
+    }
+
+    fn manual_endpoint(&self) -> Result<Option<url::Url>, String> {
+        if self.proxy_mode != ProxyMode::Manual {
+            return Ok(None);
         }
-        Ok(())
+        let raw = self.proxy_url.trim();
+        let url = url::Url::parse(raw).map_err(|_| "Enter a valid HTTP or SOCKS proxy URL.")?;
+        if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h") || url.host().is_none()
+            || !url.username().is_empty() || url.password().is_some() {
+            return Err("Use an HTTP or SOCKS proxy URL without embedded credentials.".into());
+        }
+        if self.proxy_antigravity && (url.scheme() != "http" || url.port() == Some(0)
+            || url.path() != "/" || url.query().is_some() || url.fragment().is_some()
+            || raw.contains(['@', '\\']) || raw.chars().any(char::is_whitespace)) {
+            return Err("Antigravity requires an HTTP or mixed proxy port, e.g. http://127.0.0.1:7890".into());
+        }
+        Ok(Some(url))
+    }
+
+    #[cfg(any(windows, test))]
+    pub fn antigravity_proxy_url(&self) -> Result<Option<String>, String> {
+        if !self.proxy_antigravity {
+            return Ok(None);
+        }
+        Ok(self.manual_endpoint()?.map(|url| url.origin().ascii_serialization()))
     }
 }
 

@@ -3,8 +3,8 @@ import type { AutoSwitchConfig, AutoSwitchStatus } from '../types/autoSwitch';
 
 export const getAutoSwitchConfig = () => request<AutoSwitchConfig>('get_auto_switch_config');
 
-export const setAutoSwitchConfig = (config: AutoSwitchConfig) =>
-    request<AutoSwitchConfig>('set_auto_switch_config', { config });
+export const setAutoSwitchConfig = (config: AutoSwitchConfig, expected: AutoSwitchConfig | null) =>
+    request<AutoSwitchConfig>('set_auto_switch_config', { config, expected });
 
 export const getAutoSwitchStatus = () => request<AutoSwitchStatus>('get_auto_switch_status');
 

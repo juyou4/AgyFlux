@@ -415,6 +415,7 @@ fn sync_state_service_machine_id_value(storage_path: &Path, service_id: &str) ->
     }
 
     let conn = Connection::open(&db_path).map_err(|e| format!("db_open_failed: {}", e))?;
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
     conn.execute(
         "CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value TEXT);",
         [],

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AppWindow,
   ArrowsClockwise,
@@ -15,7 +15,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useConfigStore } from '../stores/useConfigStore';
-import { useAccountStore } from '../stores/useAccountStore';
+import * as accountService from '../services/accountService';
 import { SpringSegmentedControl } from '../components/motion/SpringSegmentedControl';
 import { TriLinkedRingChart } from '../components/motion/TriLinkedRingChart';
 import { BlurNumber } from '../components/motion/BlurNumber';
@@ -67,8 +67,6 @@ export default function MenuBarDashboard() {
 
   const config = useConfigStore((s) => s.config);
   const loadConfig = useConfigStore((s) => s.loadConfig);
-  const switchAccount = useAccountStore((s) => s.switchAccount);
-  const refreshAllQuotas = useAccountStore((s) => s.refreshAllQuotas);
 
   const [snapshot, setSnapshot] = useState<MenuBarSnapshot | null>(null);
   const [usage, setUsage] = useState<MenuBarUsage | null>(null);
@@ -76,16 +74,20 @@ export default function MenuBarDashboard() {
   const [windowMode, setWindowMode] = useState<QuotaWindow>('5h');
   const [refreshing, setRefreshing] = useState(false);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
+  const generationRef = useRef(0);
+  const operationRef = useRef(false);
 
   const prefs = config?.menu_bar ?? DEFAULT_MENU_BAR_PREFERENCES;
   const resetDisplay = menuBarResetTimeDisplay(prefs);
 
   const loadData = useCallback(async () => {
+    const gen = ++generationRef.current;
     const [snap, usg, pinState] = await Promise.all([
       request<MenuBarSnapshot>('get_menu_bar_snapshot').catch(() => null),
       request<MenuBarUsage>('get_menu_bar_usage').catch(() => null),
       request<boolean>('is_menu_bar_pinned').catch(() => false),
     ]);
+    if (gen !== generationRef.current) return;
     if (snap) setSnapshot(snap);
     if (usg) setUsage(usg);
     setPinned(Boolean(pinState));
@@ -104,9 +106,17 @@ export default function MenuBarDashboard() {
       const { listen } = await import('@tauri-apps/api/event');
       if (disposed) return;
       unlisteners.push(
+        await listen('menubar://opened', () => {
+          void loadConfig();
+          void loadData();
+        }),
+        await listen('menubar://data-updated', () => void loadData()),
         await listen('menubar://preferences-updated', () => {
           void loadConfig();
           void loadData();
+        }),
+        await listen<string>('menubar://error', (event) => {
+          if (event.payload) showToast(String(event.payload), 'error');
         }),
         await listen('accounts://refreshed', () => void loadData()),
         await listen('tray://account-switched', () => void loadData())
@@ -170,27 +180,33 @@ export default function MenuBarDashboard() {
   };
 
   const handleRefresh = async () => {
+    if (operationRef.current) return;
+    operationRef.current = true;
     setRefreshing(true);
     try {
-      await refreshAllQuotas();
+      await accountService.refreshAllQuotas();
       await loadData();
       showToast(zh ? '配额已更新' : 'Quotas refreshed', 'success');
     } catch (e) {
       showToast(String(e), 'error');
     } finally {
+      operationRef.current = false;
       setRefreshing(false);
     }
   };
 
   const handleSwitch = async (id: string, email: string) => {
+    if (operationRef.current) return;
+    operationRef.current = true;
     setSwitchingId(id);
     try {
-      await switchAccount(id, 'classic');
+      await accountService.switchAccount(id, 'app');
       await loadData();
       showToast(zh ? `已切换到 ${email}` : `Switched to ${email}`, 'success');
     } catch (e) {
       showToast(String(e), 'error');
     } finally {
+      operationRef.current = false;
       setSwitchingId(null);
     }
   };

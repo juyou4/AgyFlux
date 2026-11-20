@@ -32,6 +32,7 @@ export interface TokenData {
 
 export interface QuotaData {
     models: ModelQuota[];
+    model_catalog_known?: boolean;
     last_updated: number;
     is_forbidden?: boolean;
     forbidden_reason?: string;

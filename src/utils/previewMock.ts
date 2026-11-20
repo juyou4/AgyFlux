@@ -38,6 +38,7 @@ const INITIAL_ACCOUNTS: Account[] = [
       },
     ],
     quota: {
+      model_catalog_known: true,
       last_updated: nowSec() - 120,
       subscription_tier: 'Google AI Ultra',
       quota_groups: [
@@ -95,6 +96,7 @@ const INITIAL_ACCOUNTS: Account[] = [
     device_profile: makeProfile('lin02'),
     device_history: [],
     quota: {
+      model_catalog_known: true,
       last_updated: nowSec() - 90,
       subscription_tier: 'Google AI Pro',
       quota_groups: [
@@ -137,6 +139,7 @@ const INITIAL_ACCOUNTS: Account[] = [
     device_profile: makeProfile('dev03'),
     device_history: [],
     quota: {
+      model_catalog_known: true,
       last_updated: nowSec() - 180,
       subscription_tier: 'Google AI Pro',
       quota_groups: [
@@ -181,6 +184,7 @@ const INITIAL_ACCOUNTS: Account[] = [
       email: 'team.backup@gmail.com',
     },
     quota: {
+      model_catalog_known: true,
       last_updated: nowSec() - 600,
       subscription_tier: 'Antigravity',
       quota_groups: [],
@@ -212,7 +216,7 @@ let state = {
     refresh_interval: 15,
     auto_sync: true,
     sync_interval: 5,
-    network: { proxy_mode: 'system', proxy_url: '' },
+    network: { proxy_mode: 'system', proxy_url: '', proxy_antigravity: false },
     desktop: { launch_at_login: false, hide_dock_icon: false, start_minimized: false },
     menu_bar: { ...DEFAULT_MENU_BAR_PREFERENCES },
     quota_protection: {

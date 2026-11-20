@@ -127,6 +127,9 @@ pub struct ModelQuota {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuotaData {
     pub models: Vec<ModelQuota>,
+    /// 旧缓存只有额度接口的完整目录，不能用来判断客户端可选模型。
+    #[serde(default)]
+    pub model_catalog_known: bool,
     pub last_updated: i64,
     #[serde(default)]
     pub is_forbidden: bool,
@@ -148,6 +151,7 @@ impl QuotaData {
     pub fn new() -> Self {
         Self {
             models: Vec::new(),
+            model_catalog_known: false,
             last_updated: chrono::Utc::now().timestamp(),
             is_forbidden: false,
             forbidden_reason: None,

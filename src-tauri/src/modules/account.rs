@@ -1,6 +1,6 @@
 use serde::Serialize;
 use serde_json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -678,6 +678,14 @@ pub fn load_account_index() -> Result<AccountIndex, String> {
     load_account_index_in_dir(&data_dir)
 }
 
+/// 只从已保存的索引核对候选账号。某个账号文件暂时读不到时，仍保留它的位置。
+pub(super) fn indexed_ids_in_dir(root: &std::path::Path) -> Result<HashSet<String>, String> {
+    let bytes = fs::read(root.join(ACCOUNTS_INDEX)).map_err(|_| "account_index_unavailable")?;
+    let index: AccountIndex = serde_json::from_str(&sanitize_index_content(&bytes))
+        .map_err(|_| "account_index_unavailable")?;
+    Ok(index.accounts.into_iter().map(|account| account.id).collect())
+}
+
 /// Sanitize index file content by stripping BOM and leading NUL bytes
 fn sanitize_index_content(raw: &[u8]) -> String {
     // Skip UTF-8 BOM if present
@@ -942,31 +950,28 @@ pub fn list_accounts() -> Result<Vec<Account>, String> {
     Ok(accounts)
 }
 
-/// Add account
-pub fn add_account(
+/// 在已持有 ACCOUNT_INDEX_LOCK 的情况下新增账号，避免 upsert 释放锁后出现竞态。
+fn add_account_locked(
+    index: &mut AccountIndex,
     email: String,
     name: Option<String>,
     token: TokenData,
 ) -> Result<Account, String> {
-    let _lock = ACCOUNT_INDEX_LOCK
-        .lock()
-        .map_err(|e| format!("failed_to_acquire_lock: {}", e))?;
-    let mut index = load_account_index()?;
-
-    // Check if account already exists
-    if index.accounts.iter().any(|s| s.email == email) {
+    // 邮箱不区分大小写判重，与客户端状态匹配规则保持一致
+    if index
+        .accounts
+        .iter()
+        .any(|s| s.email.eq_ignore_ascii_case(&email))
+    {
         return Err(format!("Account already exists: {}", email));
     }
 
-    // Create new account
     let account_id = Uuid::new_v4().to_string();
     let mut account = Account::new(account_id.clone(), email.clone(), token);
     account.name = name.clone();
 
-    // Save account data
     save_account(&account)?;
 
-    // Update index
     index.accounts.push(AccountSummary {
         id: account.id.clone(),
         email: account.email.clone(),
@@ -977,14 +982,26 @@ pub fn add_account(
         last_used: account.last_used,
     });
 
-    // If first account, set as current
     if index.current_account_id.is_none() {
         index.current_account_id = Some(account_id);
     }
 
-    save_account_index(&index)?;
+    save_account_index(index)?;
 
     Ok(account)
+}
+
+/// Add account
+pub fn add_account(
+    email: String,
+    name: Option<String>,
+    token: TokenData,
+) -> Result<Account, String> {
+    let _lock = ACCOUNT_INDEX_LOCK
+        .lock()
+        .map_err(|e| format!("failed_to_acquire_lock: {}", e))?;
+    let mut index = load_account_index()?;
+    add_account_locked(&mut index, email, name, token)
 }
 
 /// Add or update account
@@ -998,11 +1015,11 @@ pub fn upsert_account(
         .map_err(|e| format!("failed_to_acquire_lock: {}", e))?;
     let mut index = load_account_index()?;
 
-    // Find account ID if exists
+    // 忽略邮箱大小写查找已有账号，防止大小写差异导入重复条目导致状态匹配歧义
     let existing_account_id = index
         .accounts
         .iter()
-        .find(|s| s.email == email)
+        .find(|s| s.email.eq_ignore_ascii_case(&email))
         .map(|s| s.id.clone());
 
     if let Some(account_id) = existing_account_id {
@@ -1012,7 +1029,9 @@ pub fn upsert_account(
                 let old_access_token = account.token.access_token.clone();
                 let old_refresh_token = account.token.refresh_token.clone();
                 account.token = token;
-                account.name = name.clone();
+                if name.is_some() {
+                    account.name = name.clone();
+                }
                 // If an account was previously disabled (e.g. invalid_grant), any explicit token upsert
                 // should re-enable it (user manually updated credentials in the UI).
                 if account.disabled
@@ -1028,7 +1047,11 @@ pub fn upsert_account(
 
                 // Sync name in index
                 if let Some(idx_summary) = index.accounts.iter_mut().find(|s| s.id == account_id) {
-                    idx_summary.name = name;
+                    if name.is_some() {
+                        idx_summary.name = name;
+                    }
+                    idx_summary.disabled = account.disabled;
+                    idx_summary.last_used = account.last_used;
                     save_account_index(&index)?;
                 }
 
@@ -1047,6 +1070,8 @@ pub fn upsert_account(
                 // Sync name in index
                 if let Some(idx_summary) = index.accounts.iter_mut().find(|s| s.id == account_id) {
                     idx_summary.name = name;
+                    idx_summary.disabled = false;
+                    idx_summary.last_used = account.last_used;
                     save_account_index(&index)?;
                 }
 
@@ -1055,13 +1080,8 @@ pub fn upsert_account(
         }
     }
 
-    // Add if not exists
-    // Note: add_account will attempt to acquire lock, which would deadlock here.
-    // Use an internal version or release lock.
-
-    // Release lock, let add_account handle it
-    drop(_lock);
-    add_account(email, name, token)
+    // 保持持有 ACCOUNT_INDEX_LOCK 直接新增，避免并发写入产生重复账号
+    add_account_locked(&mut index, email, name, token)
 }
 
 fn clear_target_selection(index: &mut AccountIndex, id: &str) {
@@ -1419,6 +1439,13 @@ fn is_account_access_blocked_message(message: &str) -> bool {
 
 fn format_switch_refresh_error(message: &str) -> String {
     let lower = message.to_lowercase();
+
+    if lower.contains("oauth_client_not_configured") {
+        return format!(
+            "Token refresh failed: local Google OAuth client is not configured (oauth_client_not_configured). Configure ~/.antigravity_tools/google-oauth.json or AGYFLUX_GOOGLE_OAUTH_CLIENT_ID/SECRET. Raw error: {}",
+            message
+        );
+    }
 
     if lower.contains("unauthorized_client")
         || lower.contains("invalid_client")

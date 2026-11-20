@@ -376,7 +376,21 @@
     "retry": "Reload",
     "load_failed": "Could not load settings or accounts. Please try again.",
     "save_failed": "Could not save: {{error}}",
-    "status_failed": "Could not read switch status. Check Settings.",
+    "status_failed": "Auto-switch status unavailable",
+    "phase": {
+      "disabled": "Disabled",
+      "monitoring": "Monitoring",
+      "blocked": "Paused",
+      "pending": "Waiting to switch",
+      "switching": "Switching",
+      "canceled": "Canceled",
+      "completed": "Completed"
+    },
+    "process": {
+      "running": "Client process running",
+      "closed": "Client not running",
+      "unknown": "Client status unavailable"
+    },
     "action_failed": "The action did not complete. Refresh status before retrying.",
     "remaining": "Current account has {{percent}}% remaining",
     "next_account": "Backup account: {{email}}",

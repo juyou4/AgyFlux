@@ -273,6 +273,71 @@ pub fn decode_unified_state_entry(outer_b64: &str) -> Result<(String, Vec<u8>), 
         .or_else(|_| decode_legacy_unified_state_entry(&outer_blob))
 }
 
+/// 在可能包含多个 sentinel entry 的 Topic 中按 key 精确查找对应 payload。
+/// 官方新版本会在同一 topic 下写入多个 Field 1 entry，不能只看第一个 entry。
+pub fn find_unified_state_entry(
+    outer_b64: &str,
+    target_key: &str,
+) -> Result<Option<Vec<u8>>, String> {
+    use base64::{engine::general_purpose, Engine as _};
+
+    let outer_blob = general_purpose::STANDARD
+        .decode(outer_b64)
+        .map_err(|e| format!("Outer Base64 decoding failed: {}", e))?;
+
+    let mut offset = 0;
+    let mut saw_topic_entry = false;
+    while offset < outer_blob.len() {
+        let (tag, new_offset) = read_varint(&outer_blob, offset)?;
+        let wire_type = (tag & 7) as u8;
+        let field_num = (tag >> 3) as u32;
+        let next_offset = skip_field(&outer_blob, new_offset, wire_type)?;
+
+        if field_num == 1 && wire_type == 2 {
+            let (length, content_offset) = read_varint(&outer_blob, new_offset)?;
+            let end = content_offset
+                .checked_add(usize::try_from(length).map_err(|_| "incomplete_data")?)
+                .ok_or("incomplete_data")?;
+            if end > outer_blob.len() {
+                return Err("Topic.data entry 数据不完整".to_string());
+            }
+            let entry = &outer_blob[content_offset..end];
+            if let Some(key) = unified_topic_entry_key(entry) {
+                saw_topic_entry = true;
+                if key == target_key {
+                    let row_blob =
+                        find_field(entry, 2)?.ok_or("Topic row not found".to_string())?;
+                    if let Ok(encoded_payload) = find_field(&row_blob, 1)
+                        .and_then(|opt| opt.ok_or("Topic row value not found".to_string()))
+                        .and_then(|bytes| {
+                            String::from_utf8(bytes)
+                                .map_err(|_| "Topic row value is not UTF-8".to_string())
+                        })
+                    {
+                        if let Ok(payload) = general_purpose::STANDARD.decode(&encoded_payload) {
+                            return Ok(Some(payload));
+                        }
+                    }
+                    // 兼容早期把原始 payload 或 base64 直接放在 entry Field 2 的写入格式
+                    return Ok(Some(decode_legacy_base64_payload_if_needed(row_blob)));
+                }
+            }
+        }
+
+        offset = next_offset;
+    }
+
+    if saw_topic_entry {
+        return Ok(None);
+    }
+
+    match decode_legacy_unified_state_entry(&outer_blob) {
+        Ok((key, payload)) if key == target_key => Ok(Some(payload)),
+        Ok(_) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
 /// 查找指定 protobuf varint 字段
 pub fn find_varint_field(data: &[u8], target_field: u32) -> Result<Option<u64>, String> {
     let mut offset = 0;
@@ -440,5 +505,24 @@ mod tests {
         assert!(decode_unified_state_entry(&corrupt).is_err());
         let valid = create_unified_state_entry("sentinel", &[0x01, 0x02]);
         assert!(decode_unified_state_entry(&valid).is_ok());
+    }
+
+    #[test]
+    fn find_unified_state_entry_locates_non_first_sentinel_row() {
+        use base64::{engine::general_purpose, Engine as _};
+        let mut topic = create_unified_topic_entry("otherSentinelKey", b"ignored");
+        topic.extend(create_unified_topic_entry(
+            "oauthTokenInfoSentinelKey",
+            b"expected-payload",
+        ));
+        let encoded = general_purpose::STANDARD.encode(&topic);
+        assert_eq!(
+            find_unified_state_entry(&encoded, "oauthTokenInfoSentinelKey").unwrap(),
+            Some(b"expected-payload".to_vec())
+        );
+        assert_eq!(
+            find_unified_state_entry(&encoded, "missingSentinelKey").unwrap(),
+            None
+        );
     }
 }

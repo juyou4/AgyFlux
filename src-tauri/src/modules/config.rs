@@ -128,6 +128,36 @@ fn patch_menu_bar_preferences_at(path: &Path, patch: crate::models::config::Menu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn antigravity_proxy_is_opt_in_and_round_trips_in_the_manager_config() {
+        use crate::models::config::ProxyMode;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(CONFIG_FILE);
+        fs::write(&path, r#"{"network":{"proxy_mode":"manual","proxy_url":"socks5://localhost:1080"}}"#).unwrap();
+        let mut config = load_config_at(&path).unwrap();
+        assert!(config.network.validate().is_ok());
+        assert_eq!(config.network.antigravity_proxy_url().unwrap(), None);
+
+        config.network.proxy_antigravity = true;
+        for bad in ["socks5://localhost:1080", "http://user:password@localhost",
+            "http://localhost:0", "http://localhost/path", "http://localhost/?x", "http://localhost/#x"] {
+            config.network.proxy_url = bad.into();
+            assert!(save_config_at(&path, &config).is_err());
+        }
+        assert!(!load_config_at(&path).unwrap().network.proxy_antigravity);
+        config.network.proxy_url = "http://[::1]:7890/".into();
+        save_config_at(&path, &config).unwrap();
+        let mut saved = load_config_at(&path).unwrap().network;
+        assert_eq!(saved.antigravity_proxy_url().unwrap().as_deref(), Some("http://[::1]:7890"));
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+
+        for mode in [ProxyMode::Direct, ProxyMode::System] {
+            saved.proxy_mode = mode;
+            assert_eq!(saved.antigravity_proxy_url().unwrap(), None);
+        }
+    }
     #[test]
     fn hidden_card_positions_survive_toggle_reload_and_stale_general_save() {
         let root = tempfile::tempdir().unwrap();

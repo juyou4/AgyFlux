@@ -1,6 +1,6 @@
 export type StatusIconState = 'idle' | 'waiting' | 'busy' | 'success' | 'error' | 'cancelled';
 
-/** 借鉴任务状态图标：只在状态变化时描边，等待态与执行态分别呈现。 */
+/** 任务状态图标：只在状态变化时描边，等待态与执行态分别呈现。 */
 export function StatusIcon({ state, size = 18 }: { state: StatusIconState; size?: number }) {
   return (
     <svg key={state} aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none"

@@ -18,6 +18,6 @@ npm.cmd run build
 | --- | --- |
 | `agyflux-desktop.exe` | 桌面应用 |
 | `agyflux.exe` | 命令行工具 |
-| `LICENSE`、`third-party/cc-switch.LICENSE` | 项目及第三方许可 |
+| `LICENSE` | 许可协议 |
 
 可以从安装目录打开桌面应用，并运行 `agyflux.exe --version` 确认命令行版本。若发布包附带 `SHA256SUMS.txt`，可以用 PowerShell 的 `Get-FileHash -Algorithm SHA256` 检查下载文件。

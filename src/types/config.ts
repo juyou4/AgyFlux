@@ -77,8 +77,10 @@ export const DEFAULT_QUOTA_VALUATION_CONFIG: QuotaValuationConfig = {
     reference_caps_usd: {},
 };
 
+export type ProxyMode = 'system' | 'direct' | 'manual';
+
 export interface AppConfig {
-    network?: { proxy_mode: 'system' | 'direct' | 'manual'; proxy_url: string };
+    network?: { proxy_mode: ProxyMode; proxy_url: string; proxy_antigravity?: boolean };
     dashboard?: DashboardPreferences;
     desktop?: DesktopPreferences;
     menu_bar?: MenuBarPreferences;

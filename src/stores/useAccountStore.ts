@@ -11,7 +11,7 @@ interface AccountState {
     hasLoadedAccounts: boolean;
     error: string | null;
 
-    fetchAccounts: () => Promise<void>;
+    fetchAccounts: (force?: boolean) => Promise<void>;
     fetchCurrentAccount: () => Promise<void>;
     fetchActiveClients: () => Promise<void>;
     addAccount: (email: string, refreshToken: string) => Promise<void>;
@@ -35,6 +35,13 @@ interface AccountState {
     warmUpAllAccounts: () => Promise<string>;
 }
 
+// 单调请求序号 + 单飞合并，避免并发/慢响应倒灌覆盖刚切换完成的新状态。
+let accountsReqSeq = 0;
+let currentReqSeq = 0;
+let clientsReqSeq = 0;
+let inflightFetchAccounts: Promise<void> | null = null;
+let queuedFetchAccounts = false;
+
 export const useAccountStore = create<AccountState>((set, get) => ({
     accounts: [],
     currentAccount: null,
@@ -43,37 +50,78 @@ export const useAccountStore = create<AccountState>((set, get) => ({
     hasLoadedAccounts: false,
     error: null,
 
-    fetchAccounts: async () => {
-        set({ loading: true, error: null });
-        try {
-            const [accounts, currentAccount, activeClients] = await Promise.all([
-                accountService.listAccounts(),
-                accountService.getCurrentAccount().catch(() => null),
-                accountService.getActiveClientsStatus().catch(() => null),
-            ]);
-            set({ accounts, currentAccount, activeClients, loading: false, hasLoadedAccounts: true });
-        } catch (error) {
-            set({ error: String(error), loading: false });
+    fetchAccounts: async (force = false) => {
+        if (inflightFetchAccounts && !force) {
+            queuedFetchAccounts = true;
+            return inflightFetchAccounts;
         }
+
+        const run = async (): Promise<void> => {
+            const seq = ++accountsReqSeq;
+            const currentSeq = ++currentReqSeq;
+            const clientSeq = ++clientsReqSeq;
+            set({ loading: true, error: null });
+            try {
+                const [accounts, currentAccount, activeClients] = await Promise.all([
+                    accountService.listAccounts(),
+                    accountService.getCurrentAccount().catch(() => null),
+                    accountService.getActiveClientsStatus().catch(() => null),
+                ]);
+                if (seq !== accountsReqSeq) return;
+                set((state) => ({
+                    accounts,
+                    currentAccount: currentSeq === currentReqSeq ? currentAccount : state.currentAccount,
+                    activeClients: clientSeq === clientsReqSeq ? activeClients : state.activeClients,
+                    loading: false,
+                    hasLoadedAccounts: true,
+                    error: null,
+                }));
+            } catch (error) {
+                if (seq !== accountsReqSeq) return;
+                set({ error: String(error), loading: false });
+            } finally {
+                if (inflightFetchAccounts === promise) {
+                    inflightFetchAccounts = null;
+                }
+                if (queuedFetchAccounts) {
+                    queuedFetchAccounts = false;
+                    void get().fetchAccounts(true);
+                }
+            }
+        };
+
+        const promise = run();
+        inflightFetchAccounts = promise;
+        return promise;
     },
 
     fetchCurrentAccount: async () => {
+        const currentSeq = ++currentReqSeq;
+        const clientSeq = ++clientsReqSeq;
         try {
             const [account, activeClients] = await Promise.all([
                 accountService.getCurrentAccount().catch(() => null),
                 accountService.getActiveClientsStatus().catch(() => null),
             ]);
-            set({ currentAccount: account, activeClients });
+            set((state) => ({
+                currentAccount: currentSeq === currentReqSeq ? account : state.currentAccount,
+                activeClients: clientSeq === clientsReqSeq ? activeClients : state.activeClients,
+            }));
         } catch (error) {
-            set({ error: String(error) });
+            if (currentSeq === currentReqSeq) {
+                set({ error: String(error) });
+            }
         }
     },
 
     fetchActiveClients: async () => {
+        const clientSeq = ++clientsReqSeq;
         try {
             const activeClients = await accountService.getActiveClientsStatus();
+            if (clientSeq !== clientsReqSeq) return;
             set({ activeClients });
         } catch {
+            if (clientSeq !== clientsReqSeq) return;
             // 探测失败后清空旧观察，避免继续显示过期的生效账号。
             set({ activeClients: null });
         }
@@ -83,7 +131,7 @@ export const useAccountStore = create<AccountState>((set, get) => ({
         set({ loading: true, error: null });
         try {
             await accountService.addAccount(email, refreshToken);
-            await get().fetchAccounts();
+            await get().fetchAccounts(true);
             set({ loading: false });
         } catch (error) {
             set({ error: String(error), loading: false });
@@ -95,7 +143,7 @@ export const useAccountStore = create<AccountState>((set, get) => ({
         set({ loading: true, error: null });
         try {
             await accountService.deleteAccount(accountId);
-            await get().fetchAccounts();
+            await get().fetchAccounts(true);
             set({ loading: false });
         } catch (error) {
             set({ error: String(error), loading: false });
@@ -107,7 +155,7 @@ export const useAccountStore = create<AccountState>((set, get) => ({
         set({ loading: true, error: null });
         try {
             await accountService.deleteAccounts(accountIds);
-            await get().fetchAccounts();
+            await get().fetchAccounts(true);
             set({ loading: false });
         } catch (error) {
             set({ error: String(error), loading: false });
@@ -119,7 +167,7 @@ export const useAccountStore = create<AccountState>((set, get) => ({
         set({ loading: true, error: null });
         try {
             await accountService.switchAccount(accountId, targetIde);
-            await get().fetchAccounts();
+            await get().fetchAccounts(true);
             set({ loading: false });
         } catch (error) {
             set({ error: String(error), loading: false });
@@ -131,7 +179,7 @@ export const useAccountStore = create<AccountState>((set, get) => ({
         set({ loading: true, error: null });
         try {
             await accountService.fetchAccountQuota(accountId);
-            await get().fetchAccounts();
+            await get().fetchAccounts(true);
             set({ loading: false });
         } catch (error) {
             set({ error: String(error), loading: false });
@@ -143,7 +191,7 @@ export const useAccountStore = create<AccountState>((set, get) => ({
         set({ loading: true, error: null });
         try {
             const stats = await accountService.refreshAllQuotas();
-            await get().fetchAccounts();
+            await get().fetchAccounts(true);
             set({ loading: false });
             return stats;
         } catch (error) {
@@ -238,35 +286,44 @@ export const useAccountStore = create<AccountState>((set, get) => ({
     },
 
     updateAccountLabel: async (accountId: string, label: string) => {
+        const trimmed = label.trim() || undefined;
         await accountService.updateAccountLabel(accountId, label);
-        await get().fetchAccounts();
+        set((state) => ({
+            accounts: state.accounts.map((acc) =>
+                acc.id === accountId ? { ...acc, custom_label: trimmed } : acc
+            ),
+            currentAccount:
+                state.currentAccount?.id === accountId
+                    ? { ...state.currentAccount, custom_label: trimmed }
+                    : state.currentAccount,
+        }));
     },
 
     updateAccountPriority: async (accountId: string, priority: number) => {
         await accountService.updateAccountPriority(accountId, priority);
-        await get().fetchAccounts();
+        await get().fetchAccounts(true);
     },
 
     updateAccountProjectId: async (accountId: string, projectId: string | null) => {
         await accountService.updateAccountProjectId(accountId, projectId);
-        await get().fetchAccounts();
+        await get().fetchAccounts(true);
     },
 
     autoFetchAccountProjectId: async (accountId: string) => {
         const pid = await accountService.autoFetchAccountProjectId(accountId);
-        await get().fetchAccounts();
+        await get().fetchAccounts(true);
         return pid;
     },
 
     warmUpAccount: async (accountId: string) => {
         const msg = await accountService.warmUpAccount(accountId);
-        await get().fetchAccounts();
+        await get().fetchAccounts(true);
         return msg;
     },
 
     warmUpAllAccounts: async () => {
         const msg = await accountService.warmUpAllAccounts();
-        await get().fetchAccounts();
+        await get().fetchAccounts(true);
         return msg;
     },
 }));

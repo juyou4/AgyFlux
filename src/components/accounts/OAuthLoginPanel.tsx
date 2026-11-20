@@ -4,7 +4,7 @@ import * as accountService from '../../services/accountService';
 import { useAccountStore } from '../../stores/useAccountStore';
 import { copyToClipboard } from '../../utils/clipboard';
 import { isTauri } from '../../utils/env';
-import { createOAuthLoginFlow, readOAuthBrowserPreference, writeOAuthBrowserPreference } from '../../utils/oauthLoginFlow';
+import { createOAuthLoginFlow, isMissingOAuthClient, readOAuthBrowserPreference, writeOAuthBrowserPreference } from '../../utils/oauthLoginFlow';
 import { SpringCheckbox } from '../motion/SpringCheckbox';
 import { SpringAccordion } from '../motion/SpringAccordion';
 import { StatusIcon } from '../motion/StatusIcon';
@@ -71,6 +71,11 @@ export function OAuthLoginPanel({ zh, onDone }: { zh: boolean; onDone: () => voi
   const clock = `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}`;
 
   const stage: OAuthStage = login.phase === 'waiting' && login.callbackSubmitted ? 'saving' : login.phase;
+  const displayError = login.error && isMissingOAuthClient(login.error)
+    ? (zh
+      ? '本机还没有配置 Google 授权。请完成 OAuth 客户端配置后重试。'
+      : 'Google sign-in is not configured. Set up the OAuth client and try again.')
+    : login.error;
 
   return (
     <div className="space-y-3">
@@ -119,9 +124,9 @@ export function OAuthLoginPanel({ zh, onDone }: { zh: boolean; onDone: () => voi
           (login.error ? (zh ? '授权未完成，展开查看原因' : 'Expand to review error') : undefined)
         }
       >
-        {login.error && (
+        {displayError && (
           <p role="alert" className="break-words rounded-[18px] bg-[var(--rose-soft)] px-3.5 py-2.5 text-xs leading-relaxed text-[var(--rose-ink)]">
-            {login.error}
+            {displayError}
           </p>
         )}
         {login.phase === 'success' && (

@@ -239,8 +239,30 @@ fn write_client_storage(
 
 /// Manual and automatic switches must fail before reporting an incomplete write as success.
 pub(crate) fn inject_client_database(account: &crate::models::Account, path: &std::path::PathBuf) -> Result<(), String> {
-    fs::copy(path, path.with_extension("vscdb.backup"))
-        .map_err(|e| format!("Cannot back up client database: {e}"))?;
+    let backup = path.with_extension("vscdb.backup");
+    let mut last_err = None;
+    for delay_ms in [0u64, 50, 100, 150, 200] {
+        if delay_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        }
+        match fs::copy(path, &backup) {
+            Ok(_) => {
+                last_err = None;
+                break;
+            }
+            Err(e) => {
+                let retryable = matches!(e.raw_os_error(), Some(5) | Some(32))
+                    || e.kind() == std::io::ErrorKind::PermissionDenied;
+                last_err = Some(e);
+                if !retryable || backup.is_dir() {
+                    break;
+                }
+            }
+        }
+    }
+    if let Some(e) = last_err {
+        return Err(format!("Cannot back up client database: {e}"));
+    }
     db::inject_token(path, &account.token.access_token, &account.token.refresh_token, account.token.expiry_timestamp,
         &account.email, account.token.is_gcp_tos, account.token.project_id.as_deref(), account.token.id_token.as_deref(), account.token.oauth_client_key.as_deref())?;
     Ok(())
@@ -549,10 +571,27 @@ pub(crate) fn parse_keyring_payload(
         .ok_or_else(|| "Refresh Token not found in keyring payload".to_string())?
         .to_string();
 
+    let id_token = json
+        .get("token")
+        .and_then(|t| t.get("id_token"))
+        .and_then(|v| v.as_str())
+        .or_else(|| json.get("id_token").and_then(|v| v.as_str()));
+
+    let email = id_token
+        .and_then(crate::modules::migration::extract_email_from_jwt)
+        .or_else(|| {
+            json.get("token")
+                .and_then(|t| t.get("email"))
+                .and_then(|v| v.as_str())
+                .or_else(|| json.get("email").and_then(|v| v.as_str()))
+                .and_then(crate::modules::migration::valid_email)
+        });
+
     Ok(crate::modules::migration::ImportedOAuthState {
         refresh_token,
         is_gcp_tos: true,
         project_id: None,
+        email,
     })
 }
 
@@ -811,5 +850,23 @@ mod scope_tests {
         let conn = rusqlite::Connection::open(&app).unwrap();
         let machine_id: String = conn.query_row("SELECT value FROM ItemTable WHERE key = 'storage.serviceMachineId'", [], |row| row.get(0)).unwrap();
         assert_eq!(machine_id, account.device_profile.unwrap().dev_device_id);
+        let extracted = crate::modules::migration::extract_oauth_state_from_file(&app).unwrap();
+        assert_eq!(extracted.email.as_deref(), Some("b@example.test"));
+    }
+
+    #[test]
+    fn parse_keyring_payload_extracts_email_from_id_token_jwt() {
+        use base64::{engine::general_purpose, Engine as _};
+        let claims = general_purpose::URL_SAFE_NO_PAD.encode(r#"{"sub":"1","email":"jwt-user@example.test"}"#);
+        let payload = serde_json::json!({
+            "token": {
+                "access_token": "ya29.fixture",
+                "refresh_token": "1//fixture-rt",
+                "id_token": format!("eyJhbGciOiJSUzI1NiJ9.{claims}.sig")
+            }
+        });
+        let parsed = parse_keyring_payload(&payload.to_string()).unwrap();
+        assert_eq!(parsed.refresh_token, "1//fixture-rt");
+        assert_eq!(parsed.email.as_deref(), Some("jwt-user@example.test"));
     }
 }

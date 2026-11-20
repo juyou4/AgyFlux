@@ -127,7 +127,12 @@ export async function importFromDb(targetIde?: string): Promise<Account[]> {
     return res ? [res] : [];
 }
 
-export async function importLocalAccountsReport(): Promise<{ accounts: Account[]; sources: { source: string; status: string }[] }> {
+export interface LocalImportSource {
+    source: string;
+    status: string;
+}
+
+export async function importLocalAccountsReport(): Promise<{ accounts: Account[]; sources: LocalImportSource[] }> {
     return await invoke('import_local_accounts_report');
 }
 
@@ -138,6 +143,10 @@ export async function importFromCustomDb(path: string): Promise<AccountFileImpor
 
 export async function syncAccountFromDb(): Promise<Account | null> {
     return await invoke('sync_account_from_db');
+}
+
+export function reconcileAppSignIn(): Promise<void> {
+    return invoke('reconcile_app_sign_in');
 }
 
 export async function reorderAccounts(accountIds: string[]): Promise<void> {
