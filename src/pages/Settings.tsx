@@ -24,10 +24,12 @@ import {
   FolderOpen,
   Globe,
   HardDrives,
+  RocketLaunch,
   SlidersHorizontal,
   Translate,
 } from '@phosphor-icons/react';
 import { useTranslation } from 'react-i18next';
+import { useSearchParams } from 'react-router-dom';
 import { useAccountStore } from '../stores/useAccountStore';
 import { useConfigStore } from '../stores/useConfigStore';
 import { useUpdateStore } from '../stores/useUpdateStore';
@@ -49,6 +51,8 @@ import type { AutoSwitchConfig, AutoSwitchTarget, AutoSwitchStrategy } from '../
 import {
   DEFAULT_MENU_BAR_PREFERENCES,
   DEFAULT_QUOTA_VALUATION_CONFIG,
+  isAntigravityProxyEnabled,
+  resolveAntigravityProxyUrl,
   type AppConfig,
   type MenuBarPreferences,
   type MenuBarQuotaScope,
@@ -57,6 +61,24 @@ import {
 } from '../types/config';
 
 type SettingsSection = 'auto_switch' | 'client_network' | 'display_valuation' | 'desktop_data';
+
+function isSettingsSection(value: string | null): value is SettingsSection {
+  return (
+    value === 'auto_switch' ||
+    value === 'client_network' ||
+    value === 'display_valuation' ||
+    value === 'desktop_data'
+  );
+}
+
+function normalizeClientProxyUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) && /^(\[[^\]]+\]|[^/:\\\s]+):\d+$/.test(trimmed)) {
+    return `http://${trimmed}`;
+  }
+  return trimmed;
+}
 
 function isValidProxyUrl(raw: string, forClient = false): boolean {
   try {
@@ -197,6 +219,8 @@ function SectionCard({
 export default function Settings() {
   const { i18n } = useTranslation();
   const zh = i18n.language.startsWith('zh');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedSection = searchParams.get('section');
 
   const accounts = useAccountStore((s) => s.accounts);
   const fetchAccounts = useAccountStore((s) => s.fetchAccounts);
@@ -204,7 +228,9 @@ export default function Settings() {
   const { config, loadConfig, saveConfig, updateTheme, updateLanguage } = useConfigStore();
   const { updateInfo, isChecking, checkForUpdates } = useUpdateStore();
 
-  const [activeSection, setActiveSection] = useState<SettingsSection>('auto_switch');
+  const [activeSection, setActiveSection] = useState<SettingsSection>(
+    isSettingsSection(requestedSection) ? requestedSection : 'auto_switch'
+  );
   const railRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const [railIndicator, setRailIndicator] = useState<{ top: number; height: number }>({ top: 0, height: 36 });
@@ -225,6 +251,18 @@ export default function Settings() {
   const [proxyBusy, setProxyBusy] = useState(false);
   const proxyInputRef = useRef<HTMLInputElement>(null);
 
+  const [clientProxyUrlDraft, setClientProxyUrlDraft] = useState('');
+  const [clientProxyError, setClientProxyError] = useState<string | null>(null);
+  const [clientProxyBusy, setClientProxyBusy] = useState(false);
+  const [clientProxyLaunching, setClientProxyLaunching] = useState(false);
+  const clientProxyInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isSettingsSection(requestedSection)) {
+      setActiveSection(requestedSection);
+    }
+  }, [requestedSection]);
+
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
   const navItems: { id: SettingsSection; label: string; desc: string; icon: React.ReactNode }[] = useMemo(
@@ -238,7 +276,7 @@ export default function Settings() {
       {
         id: 'client_network',
         label: zh ? '客户端与网络' : 'Clients & Network',
-        desc: zh ? '路径与代理' : 'Paths, proxy & guard',
+        desc: zh ? '免 TUN、代理与路径' : 'No-TUN, proxy & paths',
         icon: <Globe size={16} weight="bold" />,
       },
       {
@@ -305,7 +343,14 @@ export default function Settings() {
     if (config?.network?.proxy_url !== undefined) {
       setProxyUrlDraft(config.network.proxy_url);
     }
-  }, [config?.network?.proxy_mode, config?.network?.proxy_url]);
+    if (config?.network !== undefined) {
+      setClientProxyUrlDraft(resolveAntigravityProxyUrl(config.network));
+    }
+  }, [
+    config?.network?.proxy_mode,
+    config?.network?.proxy_url,
+    config?.network?.antigravity_proxy_url,
+  ]);
 
   const persistConfig = async (next: AppConfig, toastText?: string) => {
     try {
@@ -427,23 +472,47 @@ export default function Settings() {
     }
   };
 
-  const clientProxyEnabled = config?.network?.proxy_mode === 'manual' && !!config.network.proxy_antigravity;
+  const savedClientProxyUrl = resolveAntigravityProxyUrl(config?.network);
+  const clientProxyEnabled = isAntigravityProxyEnabled(config?.network);
+  const normalizedClientProxyDraft = normalizeClientProxyUrl(clientProxyUrlDraft);
+  const clientProxyDirty = normalizedClientProxyDraft !== savedClientProxyUrl;
 
-  const handleProxySave = async (mode: ProxyMode, url = proxyUrlDraft, share = mode === 'manual' && clientProxyEnabled) => {
+  const selectSection = (next: SettingsSection) => {
+    setActiveSection(next);
+    if (searchParams.has('section')) {
+      setSearchParams({}, { replace: true });
+    }
+  };
+
+  const handleProxySave = async (mode: ProxyMode, url = proxyUrlDraft) => {
     if (!config || proxyBusy) return;
     const trimmed = url.trim();
-    if (mode === 'manual' && !isValidProxyUrl(trimmed, share)) {
-      setProxyError(share
-        ? (zh ? '免 TUN 需要 HTTP 或混合端口，例如 http://127.0.0.1:7890' : 'Enter the HTTP or mixed port, e.g. http://127.0.0.1:7890')
-        : (zh ? '请输入有效的 HTTP 或 SOCKS 代理地址' : 'Enter a valid HTTP or SOCKS proxy URL'));
+    if (mode === 'manual' && !isValidProxyUrl(trimmed, false)) {
+      setProxyError(zh ? '请输入有效的 HTTP 或 SOCKS 代理地址' : 'Enter a valid HTTP or SOCKS proxy URL');
       proxyInputRef.current?.focus();
       return;
     }
     setProxyError(null);
     setProxyBusy(true);
     try {
-      await saveConfig({ ...config, network: { proxy_mode: mode, proxy_url: trimmed, proxy_antigravity: share } }, true);
-      showToast(zh ? '网络代理设置已保存' : 'Network proxy saved', 'success');
+      const currentNetwork = config.network;
+      // 若旧配置仅在 manual 模式下共用 proxy_url，切走 AgyFlux 自身模式时自动迁入独立免 TUN 地址，避免意外失效。
+      const preservedClientUrl =
+        currentNetwork?.antigravity_proxy_url?.trim() ||
+        (currentNetwork?.proxy_antigravity ? resolveAntigravityProxyUrl(currentNetwork) : '');
+      await saveConfig(
+        {
+          ...config,
+          network: {
+            proxy_mode: mode,
+            proxy_url: mode === 'manual' ? trimmed : (currentNetwork?.proxy_url ?? ''),
+            proxy_antigravity: Boolean(currentNetwork?.proxy_antigravity),
+            antigravity_proxy_url: preservedClientUrl,
+          },
+        },
+        true
+      );
+      showToast(zh ? 'AgyFlux 网络代理已保存' : 'AgyFlux network proxy saved', 'success');
     } catch (e) {
       if (mode !== 'manual') setProxyModeDraft(config.network?.proxy_mode ?? 'system');
       setProxyError(String(e));
@@ -456,32 +525,89 @@ export default function Settings() {
     if (proxyBusy) return;
     setProxyModeDraft(mode);
     setProxyError(null);
-    if (mode === 'manual' && !isValidProxyUrl(proxyUrlDraft)) {
+    if (mode === 'manual' && !isValidProxyUrl(proxyUrlDraft, false)) {
       window.setTimeout(() => proxyInputRef.current?.focus(), 120);
       return;
     }
     void handleProxySave(mode);
   };
 
+  const handleClientProxySave = async (enable: boolean, rawUrl = clientProxyUrlDraft) => {
+    if (!config || clientProxyBusy) return;
+    const normalized = normalizeClientProxyUrl(rawUrl);
+    if (enable && !isValidProxyUrl(normalized, true)) {
+      setClientProxyError(
+        zh
+          ? '免 TUN 需要本地 HTTP 或混合代理端口，例如 http://127.0.0.1:7890'
+          : 'No-TUN requires a local HTTP or mixed proxy port, e.g. http://127.0.0.1:7890'
+      );
+      clientProxyInputRef.current?.focus();
+      return;
+    }
+    setClientProxyError(null);
+    setClientProxyBusy(true);
+    try {
+      const currentNetwork = config.network;
+      const nextClientUrl = enable
+        ? normalized
+        : isValidProxyUrl(normalized, true)
+          ? normalized
+          : savedClientProxyUrl;
+      await saveConfig(
+        {
+          ...config,
+          network: {
+            proxy_mode: currentNetwork?.proxy_mode ?? 'system',
+            proxy_url: currentNetwork?.proxy_url ?? '',
+            proxy_antigravity: enable,
+            antigravity_proxy_url: nextClientUrl,
+          },
+        },
+        true
+      );
+      setClientProxyUrlDraft(nextClientUrl);
+      showToast(
+        enable
+          ? zh
+            ? 'Antigravity 免 TUN 已保存并生效'
+            : 'Antigravity No-TUN saved and enabled'
+          : zh
+            ? 'Antigravity 免 TUN 已关闭'
+            : 'Antigravity No-TUN turned off',
+        'success'
+      );
+    } catch (e) {
+      setClientProxyError(String(e));
+    } finally {
+      setClientProxyBusy(false);
+    }
+  };
+
   const handleLaunchClient = async () => {
-    if (proxyBusy) return;
-    setProxyBusy(true);
-    setProxyError(null);
+    if (clientProxyBusy || clientProxyLaunching) return;
+    setClientProxyLaunching(true);
+    setClientProxyError(null);
     try {
       await configService.launchAntigravityWithProxy();
-      showToast(zh ? '正在启动 Antigravity' : 'Starting Antigravity', 'success');
+      showToast(zh ? '正在以免 TUN 模式启动 Antigravity' : 'Launching Antigravity without TUN', 'success');
     } catch (e) {
       const message = String(e);
       if (message === 'client_proxy_app_running') {
-        showToast(zh ? 'Antigravity 桌面端正在运行。退出后再点一次「启动 Antigravity」。'
-          : 'Antigravity is running. Quit the desktop app, then click Launch Antigravity again.', 'info');
+        showToast(
+          zh
+            ? 'Antigravity 桌面端正在运行。请先完全退出客户端，再点一次「免 TUN 启动」。'
+            : 'Antigravity is already running. Quit the desktop app completely, then click Launch again.',
+          'info'
+        );
       } else if (message === 'client_proxy_off') {
-        setProxyError(zh ? '请先开启 Antigravity 免 TUN。' : 'Enable the Antigravity client proxy first.');
+        setClientProxyError(
+          zh ? '请先填写代理端口并开启 Antigravity 免 TUN。' : 'Enable Antigravity No-TUN with a proxy port first.'
+        );
       } else {
-        setProxyError(message);
+        setClientProxyError(message);
       }
     } finally {
-      setProxyBusy(false);
+      setClientProxyLaunching(false);
     }
   };
 
@@ -525,7 +651,7 @@ export default function Settings() {
             <SpringSegmentedControl
               variant="shell"
               value={activeSection}
-              onChange={setActiveSection}
+              onChange={selectSection}
               options={navItems.map((n) => ({ value: n.id, label: n.label }))}
               className="w-full"
             />
@@ -557,7 +683,7 @@ export default function Settings() {
                     itemRefs.current[item.id] = el;
                   }}
                   type="button"
-                  onClick={() => setActiveSection(item.id)}
+                  onClick={() => selectSection(item.id)}
                   className={`relative z-10 flex w-full items-start gap-2.5 rounded-[20px] px-3.5 py-3 text-left transition-colors ${
                     active ? 'text-[var(--ink)]' : 'text-[var(--ink-secondary)] hover:text-[var(--ink)]'
                   }`}
@@ -767,6 +893,185 @@ export default function Settings() {
 
           {activeSection === 'client_network' && config && (
             <>
+              {/* Antigravity No-TUN (Windows dedicated top-level card, independent of AgyFlux's own proxy) */}
+              {desktopStatus?.platform === 'windows' && (
+                <SectionCard
+                  title={zh ? 'Antigravity 免 TUN 启动' : 'Antigravity No-TUN Launch'}
+                  subtitle={
+                    zh
+                      ? '无需开启代理软件全局 TUN 模式；从 AgyFlux 启动或切号重启 Antigravity 时，自动注入本地 HTTP 代理'
+                      : 'Skip global TUN mode — injects a local HTTP/mixed proxy whenever AgyFlux launches or restarts Antigravity'
+                  }
+                  right={
+                    <Toggle
+                      checked={clientProxyEnabled}
+                      disabled={clientProxyBusy}
+                      label={zh ? 'Antigravity 免 TUN 启动' : 'Antigravity No-TUN Launch'}
+                      onChange={(enable) => void handleClientProxySave(enable)}
+                    />
+                  }
+                >
+                  <fieldset className="min-w-0 space-y-3" disabled={clientProxyBusy}>
+                    <div>
+                      <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                        <label
+                          htmlFor="antigravity-notun-proxy"
+                          className="text-xs font-medium text-[var(--ink-secondary)]"
+                        >
+                          {zh ? '本地 HTTP / 混合代理端口' : 'Local HTTP / Mixed Proxy Port'}
+                        </label>
+                        <span className="text-[11px] text-[var(--ink-muted)]">
+                          {zh ? '常见端口：Clash 7890 · v2rayN 10809' : 'Common: Clash 7890 · v2rayN 10809'}
+                        </span>
+                      </div>
+                      <div className="flex gap-2">
+                        <input
+                          id="antigravity-notun-proxy"
+                          ref={clientProxyInputRef}
+                          type="text"
+                          value={clientProxyUrlDraft}
+                          onChange={(e) => {
+                            setClientProxyUrlDraft(e.target.value);
+                            setClientProxyError(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              void handleClientProxySave(true, clientProxyUrlDraft);
+                            }
+                          }}
+                          placeholder="http://127.0.0.1:7890"
+                          className="h-10 w-full rounded-full bg-[var(--surface)] px-4 font-mono text-xs text-[var(--ink)] outline-none transition-shadow focus:ring-1 focus:ring-[var(--border-strong)]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void handleClientProxySave(true, clientProxyUrlDraft)}
+                          className="tactile-press h-10 shrink-0 rounded-full border border-[var(--primary-border)] bg-[var(--primary-soft)] px-5 text-xs font-semibold text-[var(--primary-ink)] hover:bg-[var(--primary-soft-hover)]"
+                        >
+                          {clientProxyEnabled
+                            ? zh ? '保存端口' : 'Save Port'
+                            : zh ? '保存并开启' : 'Save & Enable'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[20px] bg-[var(--surface-soft)] px-4 py-3">
+                      <div className="flex min-w-0 items-center gap-2 text-xs text-[var(--ink-secondary)]">
+                        <span
+                          className={`h-2 w-2 shrink-0 rounded-full ${
+                            clientProxyEnabled
+                              ? clientProxyDirty
+                                ? 'bg-[var(--amber)]'
+                                : 'bg-[var(--emerald)]'
+                              : 'bg-[var(--ink-muted)]'
+                          }`}
+                        />
+                        <span className="truncate">
+                          {clientProxyEnabled
+                            ? clientProxyDirty
+                              ? zh
+                                ? '端口已修改，请先点击「保存端口」后再启动'
+                                : 'Port changed — click Save Port before launching'
+                              : zh
+                                ? `已生效（${savedClientProxyUrl}）· 启动与切号重启客户端均自动走此代理`
+                                : `Active (${savedClientProxyUrl}) · applies to launch & switch restarts`
+                            : zh
+                              ? '未开启 · 仅作用于 Antigravity 客户端，与下方 AgyFlux 自身代理互不影响'
+                              : 'Off · only applies to Antigravity client, independent of AgyFlux proxy below'}
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => void handleLaunchClient()}
+                        disabled={!clientProxyEnabled || clientProxyDirty || clientProxyLaunching}
+                        className="tactile-press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--bg-card)] px-4 text-xs font-semibold text-[var(--ink)] hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        <RocketLaunch size={14} weight="bold" />
+                        <span>
+                          {clientProxyLaunching
+                            ? zh ? '正在启动…' : 'Launching…'
+                            : zh ? '免 TUN 启动 Antigravity' : 'Launch Antigravity'}
+                        </span>
+                      </button>
+                    </div>
+
+                    {clientProxyError && (
+                      <p role="alert" className="text-xs text-[var(--rose-ink)]">
+                        {clientProxyError}
+                      </p>
+                    )}
+                  </fieldset>
+                </SectionCard>
+              )}
+
+              {/* AgyFlux App Network Proxy (strictly for AgyFlux's own outbound requests) */}
+              <SectionCard
+                title={zh ? 'AgyFlux 自身网络代理' : 'AgyFlux Network Proxy'}
+                subtitle={
+                  zh
+                    ? '仅用于 AgyFlux 自己刷新配额、OAuth 登录和预热，不影响 Antigravity 免 TUN'
+                    : 'Only controls AgyFlux outbound requests (quota refresh, OAuth, warmup) — independent from No-TUN'
+                }
+              >
+                <fieldset className="min-w-0 space-y-3" disabled={proxyBusy}>
+                  <SpringSegmentedControl
+                    value={proxyModeDraft}
+                    onChange={handleProxyModeChange}
+                    options={[
+                      { value: 'system', label: zh ? '跟随系统' : 'System' },
+                      { value: 'direct', label: zh ? '直连' : 'Direct' },
+                      { value: 'manual', label: zh ? '手动配置' : 'Manual' },
+                    ]}
+                  />
+
+                  <p className="text-xs text-[var(--ink-muted)]">
+                    {proxyModeDraft === 'system'
+                      ? zh
+                        ? '自动沿用操作系统当前代理（推荐；代理软件开启「系统代理」时即可直接刷新配额和登录）。'
+                        : 'Uses your OS system proxy automatically (recommended when your proxy app enables System Proxy).'
+                      : proxyModeDraft === 'direct'
+                        ? zh
+                          ? '强制跳过系统代理直连网络（仅适合路由器透明代理或无需代理的环境）。'
+                          : 'Bypasses the OS system proxy and connects directly (for transparent proxies or direct networks).'
+                        : zh
+                          ? '为 AgyFlux 单独指定 HTTP / HTTPS / SOCKS5 代理地址，不依赖系统代理设置。'
+                          : 'Specify a dedicated HTTP, HTTPS, or SOCKS5 proxy address for AgyFlux requests.'}
+                  </p>
+
+                  <SpringAccordion open={proxyModeDraft === 'manual'}>
+                    <div className="pt-1">
+                      <div className="flex gap-2">
+                        <input
+                          ref={proxyInputRef}
+                          type="text"
+                          aria-label={zh ? 'AgyFlux 代理地址' : 'AgyFlux Proxy URL'}
+                          value={proxyUrlDraft}
+                          onChange={(e) => {
+                            setProxyUrlDraft(e.target.value);
+                            setProxyError(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              void handleProxySave('manual', proxyUrlDraft);
+                            }
+                          }}
+                          placeholder={zh ? 'http://127.0.0.1:7890 或 socks5://127.0.0.1:1080' : 'http://127.0.0.1:7890 or socks5://127.0.0.1:1080'}
+                          className="h-10 w-full rounded-full bg-[var(--surface)] px-4 font-mono text-xs text-[var(--ink)] outline-none transition-shadow focus:ring-1 focus:ring-[var(--border-strong)]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void handleProxySave('manual', proxyUrlDraft)}
+                          className="tactile-press h-10 shrink-0 rounded-full border border-[var(--primary-border)] bg-[var(--primary-soft)] px-5 text-xs font-semibold text-[var(--primary-ink)] hover:bg-[var(--primary-soft-hover)]"
+                        >
+                          {zh ? '应用' : 'Apply'}
+                        </button>
+                      </div>
+                    </div>
+                  </SpringAccordion>
+                  {proxyError && <p role="alert" className="text-xs text-[var(--rose-ink)]">{proxyError}</p>}
+                </fieldset>
+              </SectionCard>
+
               {/* Client Executables */}
               <SectionCard
                 title={zh ? '客户端路径' : 'Client Executable Paths'}
@@ -823,78 +1128,6 @@ export default function Settings() {
                     </div>
                   </div>
                 </div>
-              </SectionCard>
-
-              {/* Network Proxy */}
-              <SectionCard
-                title={zh ? '网络代理' : 'Network proxy'}
-                subtitle={zh ? '用于刷新配额和账号登录' : 'Outbound mode for quota checks, OAuth & warmup requests'}
-              >
-                <fieldset className="min-w-0 space-y-3" disabled={proxyBusy}>
-                  <SpringSegmentedControl
-                    value={proxyModeDraft}
-                    onChange={handleProxyModeChange}
-                    options={[
-                      { value: 'system', label: zh ? '跟随系统' : 'System' },
-                      { value: 'direct', label: zh ? '直连' : 'Direct' },
-                      { value: 'manual', label: zh ? '手动配置' : 'Manual' },
-                    ]}
-                  />
-
-                  <SpringAccordion open={proxyModeDraft === 'manual'}>
-                    <div className="pt-1">
-                      <div className="flex gap-2">
-                        <input
-                          ref={proxyInputRef}
-                          type="text"
-                          aria-label={zh ? '代理地址' : 'Proxy URL'}
-                          value={proxyUrlDraft}
-                          onChange={(e) => {
-                            setProxyUrlDraft(e.target.value);
-                            setProxyError(null);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              void handleProxySave('manual', proxyUrlDraft);
-                            }
-                          }}
-                          placeholder="http://127.0.0.1:7890"
-                          className="h-10 w-full rounded-full bg-[var(--surface)] px-4 font-mono text-xs text-[var(--ink)] outline-none transition-shadow focus:ring-1 focus:ring-[var(--border-strong)]"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => void handleProxySave('manual', proxyUrlDraft)}
-                          className="tactile-press h-10 shrink-0 rounded-full border border-[var(--primary-border)] bg-[var(--primary-soft)] px-5 text-xs font-semibold text-[var(--primary-ink)] hover:bg-[var(--primary-soft-hover)]"
-                        >
-                          {zh ? '应用' : 'Apply'}
-                        </button>
-                      </div>
-                      {desktopStatus?.platform === 'windows' && (
-                        <div className="mt-4 space-y-2">
-                          <div className="flex items-center justify-between gap-4">
-                            <div>
-                              <p className="text-xs font-semibold">{zh ? 'Antigravity 免 TUN' : 'Antigravity without TUN'}</p>
-                              <p className="mt-0.5 text-xs text-[var(--ink-secondary)]">
-                                {zh ? '从 AgyFlux 启动或切号重启时，客户端和后台服务共用此 HTTP / 混合代理。'
-                                  : 'The app and its background service use this HTTP proxy when AgyFlux launches it or restarts it after an account switch.'}
-                              </p>
-                            </div>
-                            <Toggle checked={clientProxyEnabled} label={zh ? 'Antigravity 免 TUN' : 'Antigravity without TUN'}
-                              onChange={(enable) => void handleProxySave('manual', enable ? proxyUrlDraft : config.network?.proxy_url, enable)} />
-                          </div>
-                          {clientProxyEnabled && (
-                            <button type="button" onClick={() => void handleLaunchClient()}
-                              disabled={!isTauri() || proxyUrlDraft.trim() !== config.network?.proxy_url}
-                              className="tactile-press rounded-full border border-[var(--border)] px-4 py-2 text-xs font-semibold disabled:opacity-45">
-                              {zh ? '启动 Antigravity' : 'Launch Antigravity'}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </SpringAccordion>
-                  {proxyError && <p role="alert" className="text-xs text-[var(--rose-ink)]">{proxyError}</p>}
-                </fieldset>
               </SectionCard>
 
               {/* Refresh Intervals & Quota Protection */}

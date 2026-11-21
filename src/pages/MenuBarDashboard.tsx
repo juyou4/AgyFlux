@@ -432,6 +432,10 @@ export default function MenuBarDashboard() {
               const title = formatAccountTitle(acc);
               const gemVal = view.windows[windowMode].gemini.remaining;
               const othVal = view.windows[windowMode].other.remaining;
+              const altWindow: QuotaWindow = windowMode === '5h' ? 'weekly' : '5h';
+              const showAltWindow = (prefs.show_session ?? true) && (prefs.show_weekly ?? true);
+              const altGemVal = view.windows[altWindow].gemini.remaining;
+              const altOthVal = view.windows[altWindow].other.remaining;
               const resetIso =
                 view.windows[windowMode].gemini.resets[0] ||
                 view.windows[windowMode].other.resets[0];
@@ -441,6 +445,7 @@ export default function MenuBarDashboard() {
                   : undefined,
               });
               const argonPct = view.argonWeekly.remaining;
+              const carbonPct = view.carbonWeekly.remaining;
               const hoursLeft = resetIso ? (Date.parse(resetIso) - now) / 3600_000 : null;
               const isExpiring = hoursLeft !== null && hoursLeft > 0 && hoursLeft <= 24 && (gemVal ?? 0) > 5;
 
@@ -526,6 +531,41 @@ export default function MenuBarDashboard() {
                       </span>
                     </div>
                   </div>
+
+                  {/* Complementary window + dedicated weekly pools */}
+                  {((showAltWindow && (altGemVal !== null || altOthVal !== null)) ||
+                    argonPct !== null ||
+                    carbonPct !== null) && (
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-1.5 border-t border-[var(--border-hairline)] pt-1.5 text-[10px] tabular-nums text-[var(--ink-muted)]">
+                      {showAltWindow && (altGemVal !== null || altOthVal !== null) && (
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">
+                            {altWindow === 'weekly' ? (zh ? '周额度' : 'Weekly') : '5H'}
+                          </span>
+                          <span>
+                            G <strong className={toneTextCls(altGemVal)}>{quotaDisplay(altGemVal)}</strong>
+                          </span>
+                          <span>
+                            C <strong className={toneTextCls(altOthVal)}>{quotaDisplay(altOthVal)}</strong>
+                          </span>
+                        </div>
+                      )}
+                      {(argonPct !== null || carbonPct !== null) && (
+                        <div className="flex items-center gap-1.5">
+                          {argonPct !== null && (
+                            <span className="rounded-full bg-[var(--emerald-soft)] px-1.5 py-0.5 text-[9px] font-semibold text-[var(--emerald-ink)]">
+                              Argon {Math.round(argonPct)}%
+                            </span>
+                          )}
+                          {carbonPct !== null && (
+                            <span className="rounded-full bg-[var(--surface)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--ink-secondary)]">
+                              Carbon {Math.round(carbonPct)}%
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}

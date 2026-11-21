@@ -35,11 +35,15 @@ pub struct NetworkPreferences {
     pub proxy_mode: ProxyMode,
     pub proxy_url: String,
     pub proxy_antigravity: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub antigravity_proxy_url: String,
 }
 
 impl NetworkPreferences {
     pub fn validate(&self) -> Result<(), String> {
-        self.manual_endpoint().map(|_| ())
+        self.manual_endpoint()?;
+        self.antigravity_proxy_endpoint()?;
+        Ok(())
     }
 
     fn manual_endpoint(&self) -> Result<Option<url::Url>, String> {
@@ -48,24 +52,60 @@ impl NetworkPreferences {
         }
         let raw = self.proxy_url.trim();
         let url = url::Url::parse(raw).map_err(|_| "Enter a valid HTTP or SOCKS proxy URL.")?;
-        if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h") || url.host().is_none()
-            || !url.username().is_empty() || url.password().is_some() {
+        if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h")
+            || url.host().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
             return Err("Use an HTTP or SOCKS proxy URL without embedded credentials.".into());
-        }
-        if self.proxy_antigravity && (url.scheme() != "http" || url.port() == Some(0)
-            || url.path() != "/" || url.query().is_some() || url.fragment().is_some()
-            || raw.contains(['@', '\\']) || raw.chars().any(char::is_whitespace)) {
-            return Err("Antigravity requires an HTTP or mixed proxy port, e.g. http://127.0.0.1:7890".into());
         }
         Ok(Some(url))
     }
 
-    #[cfg(any(windows, test))]
-    pub fn antigravity_proxy_url(&self) -> Result<Option<String>, String> {
+    fn validate_antigravity_http_url(raw: &str) -> Result<url::Url, String> {
+        let raw = raw.trim();
+        let url = url::Url::parse(raw).map_err(|_| {
+            "Antigravity requires an HTTP or mixed proxy port, e.g. http://127.0.0.1:7890"
+        })?;
+        if url.scheme() != "http"
+            || url.host().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.port() == Some(0)
+            || url.path() != "/"
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || raw.contains(['@', '\\'])
+            || raw.chars().any(char::is_whitespace)
+        {
+            return Err(
+                "Antigravity requires an HTTP or mixed proxy port, e.g. http://127.0.0.1:7890"
+                    .into(),
+            );
+        }
+        Ok(url)
+    }
+
+    fn antigravity_proxy_endpoint(&self) -> Result<Option<url::Url>, String> {
         if !self.proxy_antigravity {
             return Ok(None);
         }
-        Ok(self.manual_endpoint()?.map(|url| url.origin().ascii_serialization()))
+        let dedicated = self.antigravity_proxy_url.trim();
+        if !dedicated.is_empty() {
+            return Self::validate_antigravity_http_url(dedicated).map(Some);
+        }
+        // 兼容旧配置：未单独填写免 TUN 地址时，在手动代理模式下沿用 proxy_url。
+        if self.proxy_mode == ProxyMode::Manual {
+            return Self::validate_antigravity_http_url(&self.proxy_url).map(Some);
+        }
+        Ok(None)
+    }
+
+    #[cfg(any(windows, test))]
+    pub fn antigravity_proxy_url(&self) -> Result<Option<String>, String> {
+        Ok(self
+            .antigravity_proxy_endpoint()?
+            .map(|url| url.origin().ascii_serialization()))
     }
 }
 

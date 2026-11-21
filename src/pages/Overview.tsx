@@ -7,6 +7,7 @@ import {
   Code,
   Fire,
   Laptop,
+  RocketLaunch,
   Sparkle,
   TerminalWindow,
   WarningCircle,
@@ -16,6 +17,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAccountStore } from '../stores/useAccountStore';
 import { useConfigStore } from '../stores/useConfigStore';
 import { reconcileAppSignIn } from '../services/accountService';
+import * as configService from '../services/configService';
+import { isAntigravityProxyEnabled, resolveAntigravityProxyUrl } from '../types/config';
 import { getAccountTier } from '../utils/accountTier';
 import { AccountTierBadge } from '../components/accounts/AccountTierBadge';
 import {
@@ -119,7 +122,7 @@ function toDashboardAccount(a: Account): DashboardAccount {
               buckets: g.buckets.map((b) => ({
                 bucket_id: b.bucket_id,
                 window: b.window,
-                remaining_fraction: b.remaining_fraction,
+                remaining_fraction: b.remaining_fraction_known === false ? null : b.remaining_fraction,
                 reset_time: b.reset_time,
               })),
             })) ?? null,
@@ -169,6 +172,8 @@ export default function Overview() {
   const [usage, setUsage] = useState<LocalTokenUsageSummary | null>(null);
   const [pricing, setPricing] = useState<ApiPricingSnapshot | null>(null);
   const [appSignInBusy, setAppSignInBusy] = useState(false);
+  const [desktopPlatform, setDesktopPlatform] = useState<string | null>(null);
+  const [launchingClient, setLaunchingClient] = useState(false);
   const switchingRef = useRef(false);
 
   const loadTelemetry = useCallback(async () => {
@@ -187,7 +192,44 @@ export default function Overview() {
   useEffect(() => {
     void fetchAccounts();
     void loadTelemetry();
+    void configService
+      .getDesktopSettings()
+      .then((ds) => setDesktopPlatform(ds.platform))
+      .catch(() => null);
   }, [fetchAccounts, loadTelemetry]);
+
+  const isWindowsPlatform = desktopPlatform === 'windows';
+  const clientProxyUrl = resolveAntigravityProxyUrl(config?.network);
+  const clientProxyEnabled = isAntigravityProxyEnabled(config?.network);
+
+  const handleLaunchClientProxy = async () => {
+    if (launchingClient) return;
+    setLaunchingClient(true);
+    try {
+      await configService.launchAntigravityWithProxy();
+      showToast(zh ? '正在以免 TUN 模式启动 Antigravity' : 'Launching Antigravity without TUN', 'success');
+    } catch (error) {
+      const message = String(error);
+      if (message === 'client_proxy_app_running') {
+        showToast(
+          zh
+            ? 'Antigravity 正在运行。请先完全退出客户端，再点一次「免 TUN 启动」。'
+            : 'Antigravity is already running. Quit it completely, then click Launch again.',
+          'info'
+        );
+      } else if (message === 'client_proxy_off') {
+        showToast(
+          zh ? '请先在设置中填写代理端口并开启免 TUN。' : 'Enable Antigravity No-TUN in Settings first.',
+          'info'
+        );
+        navigate('/settings?section=client_network');
+      } else {
+        showToast(message, 'error');
+      }
+    } finally {
+      setLaunchingClient(false);
+    }
+  };
 
   const activeIdentity = clientIdentity(activeClients, clientTab);
   const activeClientId = activeIdentity.accountId;
@@ -312,9 +354,11 @@ export default function Overview() {
   };
 
   const activeGemini5h = activeAccount ? extractPoolWindow(activeAccount, 'gemini', '5h') : null;
-  const activeOther5h = activeAccount ? extractPoolWindow(activeAccount, 'other', '5h') : null;
   const activeGeminiWeek = activeAccount ? extractPoolWindow(activeAccount, 'gemini', 'weekly') : null;
+  const activeOther5h = activeAccount ? extractPoolWindow(activeAccount, 'other', '5h') : null;
+  const activeOtherWeek = activeAccount ? extractPoolWindow(activeAccount, 'other', 'weekly') : null;
   const activeArgon = activeAccount ? extractPoolWindow(activeAccount, 'argon', 'weekly') : null;
+  const activeCarbonWeek = activeAccount ? extractPoolWindow(activeAccount, 'carbon', 'weekly') : null;
 
   return (
     <div className="space-y-5">
@@ -388,7 +432,37 @@ export default function Overview() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {clientTab === 'classic' && isWindowsPlatform && (
+                    clientProxyEnabled ? (
+                      <button
+                        type="button"
+                        disabled={launchingClient}
+                        onClick={() => void handleLaunchClientProxy()}
+                        title={
+                          zh
+                            ? `以免 TUN 模式启动 Antigravity（${clientProxyUrl}）`
+                            : `Launch Antigravity without TUN (${clientProxyUrl})`
+                        }
+                        className="tactile-press inline-flex h-8 items-center gap-1.5 rounded-full border border-[var(--primary-border)] bg-[var(--primary-soft)] px-3.5 text-xs font-semibold text-[var(--primary-ink)] hover:bg-[var(--primary-soft-hover)] disabled:opacity-50"
+                      >
+                        <RocketLaunch size={13} weight="bold" />
+                        <span>
+                          {launchingClient ? (zh ? '启动中…' : 'Launching…') : (zh ? '免 TUN 启动' : 'No-TUN Launch')}
+                        </span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => navigate('/settings?section=client_network')}
+                        title={zh ? '配置 Antigravity 免 TUN 启动' : 'Configure Antigravity No-TUN launch'}
+                        className="tactile-press inline-flex h-8 items-center gap-1.5 rounded-full bg-[var(--surface)] px-3.5 text-xs font-medium text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)]"
+                      >
+                        <RocketLaunch size={13} weight="bold" />
+                        <span>{zh ? '免 TUN' : 'No-TUN'}</span>
+                      </button>
+                    )
+                  )}
                   <MorphActionButton
                     size="sm"
                     variant="secondary"
@@ -417,81 +491,136 @@ export default function Overview() {
                 </div>
               </div>
 
-              {/* Compact 5H / Weekly Quota Pills */}
+              {/* Compact 5H + Weekly Dual-Window Quota Cards */}
               <WaveRevealContainer waveKey={refreshWaveKey} className="rounded-[20px]">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 pt-1">
-                <div className="rounded-[20px] bg-[var(--surface-soft)] p-4">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-medium text-[var(--ink-secondary)]">Gemini · 5H</span>
-                    <BlurNumber
-                      mode="odometer"
-                      value={quotaDisplay(activeGemini5h?.remaining ?? null)}
-                      className="font-mono font-semibold text-[var(--ink)]"
-                    />
+              <div className="space-y-2.5 pt-1">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {/* Gemini 5H + Weekly */}
+                  <div className="rounded-[20px] bg-[var(--surface-soft)] p-4 space-y-3">
+                    <div className="text-xs font-semibold text-[var(--ink)]">Gemini</div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="group/meter min-w-0">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="font-medium text-[var(--ink-secondary)]">5H</span>
+                          <BlurNumber
+                            mode="odometer"
+                            value={quotaDisplay(activeGemini5h?.remaining ?? null)}
+                            className="font-mono font-semibold text-[var(--ink)]"
+                          />
+                        </div>
+                        <div className="mt-1.5">
+                          <MeterBar value={activeGemini5h?.remaining ?? null} />
+                        </div>
+                        <div className="mt-1 truncate text-[10px] font-mono text-[var(--ink-muted)]">
+                          {activeGemini5h?.resetTime
+                            ? `${formatShortCountdown(activeGemini5h.resetTime)} ${zh ? '重置' : 'reset'}`
+                            : '—'}
+                        </div>
+                      </div>
+
+                      <div className="group/meter min-w-0">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="font-medium text-[var(--ink-secondary)]">
+                            {zh ? '周额度' : 'Weekly'}
+                          </span>
+                          <BlurNumber
+                            mode="odometer"
+                            value={quotaDisplay(activeGeminiWeek?.remaining ?? null)}
+                            className="font-mono font-semibold text-[var(--ink)]"
+                          />
+                        </div>
+                        <div className="mt-1.5">
+                          <MeterBar value={activeGeminiWeek?.remaining ?? null} />
+                        </div>
+                        <div className="mt-1 truncate text-[10px] font-mono text-[var(--ink-muted)]">
+                          {activeGeminiWeek?.resetTime
+                            ? `${formatShortCountdown(activeGeminiWeek.resetTime)} ${zh ? '重置' : 'reset'}`
+                            : '—'}
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div className="mt-2">
-                    <MeterBar value={activeGemini5h?.remaining ?? null} />
-                  </div>
-                  <div className="mt-1.5 text-[11px] font-mono text-[var(--ink-muted)]">
-                    {activeGemini5h?.resetTime
-                      ? `${formatShortCountdown(activeGemini5h.resetTime)} ${zh ? '重置' : 'reset'}`
-                      : '—'}
+
+                  {/* Claude / GPT 5H + Weekly */}
+                  <div className="rounded-[20px] bg-[var(--surface-soft)] p-4 space-y-3">
+                    <div className="text-xs font-semibold text-[var(--ink)]">Claude / GPT</div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="group/meter min-w-0">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="font-medium text-[var(--ink-secondary)]">5H</span>
+                          <BlurNumber
+                            mode="odometer"
+                            value={quotaDisplay(activeOther5h?.remaining ?? null)}
+                            className="font-mono font-semibold text-[var(--ink)]"
+                          />
+                        </div>
+                        <div className="mt-1.5">
+                          <MeterBar value={activeOther5h?.remaining ?? null} />
+                        </div>
+                        <div className="mt-1 truncate text-[10px] font-mono text-[var(--ink-muted)]">
+                          {activeOther5h?.resetTime
+                            ? `${formatShortCountdown(activeOther5h.resetTime)} ${zh ? '重置' : 'reset'}`
+                            : '—'}
+                        </div>
+                      </div>
+
+                      <div className="group/meter min-w-0">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="font-medium text-[var(--ink-secondary)]">
+                            {zh ? '周额度' : 'Weekly'}
+                          </span>
+                          <BlurNumber
+                            mode="odometer"
+                            value={quotaDisplay(activeOtherWeek?.remaining ?? null)}
+                            className="font-mono font-semibold text-[var(--ink)]"
+                          />
+                        </div>
+                        <div className="mt-1.5">
+                          <MeterBar value={activeOtherWeek?.remaining ?? null} />
+                        </div>
+                        <div className="mt-1 truncate text-[10px] font-mono text-[var(--ink-muted)]">
+                          {activeOtherWeek?.resetTime
+                            ? `${formatShortCountdown(activeOtherWeek.resetTime)} ${zh ? '重置' : 'reset'}`
+                            : '—'}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                <div className="rounded-[20px] bg-[var(--surface-soft)] p-4">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-medium text-[var(--ink-secondary)]">Claude / GPT · 5H</span>
-                    <BlurNumber
-                      mode="odometer"
-                      value={quotaDisplay(activeOther5h?.remaining ?? null)}
-                      className="font-mono font-semibold text-[var(--ink)]"
-                    />
+                {((activeArgon?.remaining !== null && activeArgon?.remaining !== undefined) ||
+                  (activeCarbonWeek?.remaining !== null && activeCarbonWeek?.remaining !== undefined)) && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {activeArgon?.remaining !== null && activeArgon?.remaining !== undefined && (
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--surface-soft)] px-3 py-1 text-[11px] font-mono tabular-nums text-[var(--ink-secondary)]">
+                        <span className="h-1.5 w-1.5 rounded-full bg-[var(--emerald)]" />
+                        <span>Argon · {zh ? '周额度' : 'Weekly'}</span>
+                        <strong className="font-semibold text-[var(--ink)]">
+                          {quotaDisplay(activeArgon.remaining)}
+                        </strong>
+                        {activeArgon.resetTime && (
+                          <span className="text-[10px] text-[var(--ink-muted)]">
+                            · {formatShortCountdown(activeArgon.resetTime)}
+                          </span>
+                        )}
+                      </span>
+                    )}
+                    {activeCarbonWeek?.remaining !== null && activeCarbonWeek?.remaining !== undefined && (
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--surface-soft)] px-3 py-1 text-[11px] font-mono tabular-nums text-[var(--ink-secondary)]">
+                        <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
+                        <span>Carbon · {zh ? '周额度' : 'Weekly'}</span>
+                        <strong className="font-semibold text-[var(--ink)]">
+                          {quotaDisplay(activeCarbonWeek.remaining)}
+                        </strong>
+                        {activeCarbonWeek.resetTime && (
+                          <span className="text-[10px] text-[var(--ink-muted)]">
+                            · {formatShortCountdown(activeCarbonWeek.resetTime)}
+                          </span>
+                        )}
+                      </span>
+                    )}
                   </div>
-                  <div className="mt-2">
-                    <MeterBar value={activeOther5h?.remaining ?? null} />
-                  </div>
-                  <div className="mt-1.5 text-[11px] font-mono text-[var(--ink-muted)]">
-                    {activeOther5h?.resetTime
-                      ? `${formatShortCountdown(activeOther5h.resetTime)} ${zh ? '重置' : 'reset'}`
-                      : '—'}
-                  </div>
-                </div>
-
-                <div className="rounded-[20px] bg-[var(--surface-soft)] p-4">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-medium text-[var(--ink-secondary)]">
-                      {activeArgon?.remaining !== null && activeArgon?.remaining !== undefined
-                        ? 'Argon · 周额度'
-                        : zh
-                          ? 'Gemini · 周额度'
-                          : 'Gemini · Weekly'}
-                    </span>
-                    <BlurNumber
-                      mode="odometer"
-                      value={quotaDisplay(
-                        activeArgon?.remaining !== null && activeArgon?.remaining !== undefined
-                          ? activeArgon.remaining
-                          : activeGeminiWeek?.remaining ?? null
-                      )}
-                      className="font-mono font-semibold text-[var(--ink)]"
-                    />
-                  </div>
-                  <div className="mt-2">
-                    <MeterBar
-                      value={
-                        activeArgon?.remaining !== null && activeArgon?.remaining !== undefined
-                          ? activeArgon.remaining
-                          : activeGeminiWeek?.remaining ?? null
-                      }
-                    />
-                  </div>
-                  <div className="mt-1.5 text-[11px] font-mono text-[var(--ink-muted)]">
-                    {activeArgon?.resetTime || activeGeminiWeek?.resetTime
-                      ? `${formatShortCountdown(activeArgon?.resetTime || activeGeminiWeek?.resetTime)} ${zh ? '重置' : 'reset'}`
-                      : '—'}
-                  </div>
-                </div>
+                )}
               </div>
               </WaveRevealContainer>
             </div>
@@ -504,7 +633,34 @@ export default function Overview() {
                     ? (zh ? '已读到本机登录，尚未匹配账号库。' : 'The local sign-in has no confirmed match in Accounts.')
                     : (zh ? '暂时无法确认此客户端的账号' : 'Unable to confirm this client’s account')}
               </span>
-              <div className="flex flex-wrap items-center gap-3">
+              <div className="flex flex-wrap items-center gap-2.5">
+                {clientTab === 'classic' && isWindowsPlatform && (
+                  clientProxyEnabled ? (
+                    <button
+                      type="button"
+                      disabled={launchingClient}
+                      onClick={() => void handleLaunchClientProxy()}
+                      title={
+                        zh
+                          ? `以免 TUN 模式启动 Antigravity（${clientProxyUrl}）`
+                          : `Launch Antigravity without TUN (${clientProxyUrl})`
+                      }
+                      className="tactile-press inline-flex items-center gap-1.5 rounded-full border border-[var(--primary-border)] bg-[var(--primary-soft)] px-3 py-1.5 font-semibold text-[var(--primary-ink)] hover:bg-[var(--primary-soft-hover)] disabled:opacity-50"
+                    >
+                      <RocketLaunch size={13} weight="bold" />
+                      <span>{launchingClient ? (zh ? '启动中…' : 'Launching…') : (zh ? '免 TUN 启动' : 'No-TUN Launch')}</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => navigate('/settings?section=client_network')}
+                      className="tactile-press inline-flex items-center gap-1.5 rounded-full bg-[var(--bg-card)] px-3 py-1.5 font-medium text-[var(--ink-secondary)] hover:text-[var(--ink)]"
+                    >
+                      <RocketLaunch size={13} weight="bold" />
+                      <span>{zh ? '配置免 TUN' : 'No-TUN Setup'}</span>
+                    </button>
+                  )
+                )}
                 {canSyncAppSignIn && (
                   <button type="button" onClick={() => void handleSyncAppSignIn()} disabled={appSignInBusy}
                     className="tactile-press rounded-full border border-[var(--primary-border)] bg-[var(--primary-soft)] px-3 py-1.5 font-semibold text-[var(--primary-ink)] disabled:opacity-50">
@@ -756,6 +912,72 @@ export default function Overview() {
                   </div>
                 </div>
                 <MeterBar value={poolStats.carbon.remaining} />
+              </div>
+            )}
+
+            {accounts.length > 0 && (
+              <div className="mt-3 border-t border-[var(--border-hairline)] pt-3">
+                <div className="mb-2 flex items-center justify-between px-1">
+                  <span className="text-[11px] font-semibold text-[var(--ink-secondary)]">
+                    {poolWindow === 'weekly'
+                      ? zh ? '各账号周额度' : 'Per-Account Weekly'
+                      : zh ? '各账号 5H 余量' : 'Per-Account 5H'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/accounts')}
+                    className="text-[11px] font-medium text-[var(--ink-muted)] hover:text-[var(--ink)]"
+                  >
+                    {zh ? '全部 →' : 'All →'}
+                  </button>
+                </div>
+                <div className="max-h-44 space-y-1.5 overflow-y-auto pr-0.5">
+                  {accounts.map((acc) => {
+                    const g = extractPoolWindow(acc, 'gemini', poolWindow);
+                    const o = extractPoolWindow(acc, 'other', poolWindow);
+                    const ar = poolWindow === 'weekly' ? extractPoolWindow(acc, 'argon', 'weekly') : null;
+                    const isActiveAcc = activeAccount?.id === acc.id;
+                    return (
+                      <div
+                        key={acc.id}
+                        className="flex items-center justify-between gap-2 rounded-[14px] bg-[var(--surface-soft)] px-3 py-2 text-[11px]"
+                      >
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <span
+                            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                              isActiveAcc ? 'bg-[var(--emerald)]' : 'bg-[var(--border-strong)]'
+                            }`}
+                          />
+                          <span className="truncate font-medium text-[var(--ink)]" title={acc.email}>
+                            {acc.custom_label || acc.email}
+                          </span>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2 font-mono text-[10px] tabular-nums">
+                          <span
+                            title={g.resetTime ? `Gemini · ${formatShortCountdown(g.resetTime)}` : 'Gemini'}
+                            className="text-[var(--ink-secondary)]"
+                          >
+                            G <strong className="text-[var(--ink)]">{quotaDisplay(g.remaining)}</strong>
+                          </span>
+                          <span
+                            title={o.resetTime ? `Claude / GPT · ${formatShortCountdown(o.resetTime)}` : 'Claude / GPT'}
+                            className="text-[var(--ink-secondary)]"
+                          >
+                            C <strong className="text-[var(--ink)]">{quotaDisplay(o.remaining)}</strong>
+                          </span>
+                          {ar && ar.remaining !== null && (
+                            <span
+                              title={ar.resetTime ? `Argon · ${formatShortCountdown(ar.resetTime)}` : 'Argon'}
+                              className="rounded-full bg-[var(--emerald-soft)] px-1.5 py-0.5 text-[9px] font-semibold text-[var(--emerald-ink)]"
+                            >
+                              A {Math.round(ar.remaining)}%
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>

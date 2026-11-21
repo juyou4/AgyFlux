@@ -216,7 +216,7 @@ let state = {
     refresh_interval: 15,
     auto_sync: true,
     sync_interval: 5,
-    network: { proxy_mode: 'system', proxy_url: '', proxy_antigravity: false },
+    network: { proxy_mode: 'system', proxy_url: '', proxy_antigravity: false, antigravity_proxy_url: '' },
     desktop: { launch_at_login: false, hide_dock_icon: false, start_minimized: false },
     menu_bar: { ...DEFAULT_MENU_BAR_PREFERENCES },
     quota_protection: {
@@ -517,6 +517,14 @@ export async function previewMockRequest<T>(cmd: string, args: Record<string, an
     case 'save_config':
       state.config = structuredClone(args.config);
       return undefined as T;
+    case 'launch_antigravity_with_proxy': {
+      const n = state.config.network;
+      const endpoint = n?.antigravity_proxy_url?.trim() || (n?.proxy_mode === 'manual' ? n.proxy_url?.trim() : '');
+      if (!n?.proxy_antigravity || !endpoint) {
+        throw new Error('client_proxy_off');
+      }
+      return undefined as T;
+    }
     case 'set_menu_bar_preferences':
       state.config.menu_bar = { ...state.config.menu_bar, ...(args.patch || {}), ...(args.quotaScope ? { quota_scope: args.quotaScope } : {}) };
       return structuredClone(state.config.menu_bar) as T;

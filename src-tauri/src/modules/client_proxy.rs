@@ -79,6 +79,7 @@ mod tests {
             proxy_mode: ProxyMode::Manual,
             proxy_url: "http://localhost:1234".into(),
             proxy_antigravity: true,
+            ..Default::default()
         };
         let args = [
             "--no-proxy-server", "--proxy-server", "old", "--proxy-pac-url=old",
@@ -145,9 +146,10 @@ mod tests {
                     "/D".into(), "/C".into(), "set".into(), format!("HTTPS_PROXY>{receipt}"),
                 ]),
                 network: NetworkPreferences {
-                    proxy_mode: ProxyMode::Manual,
-                    proxy_url: saved.into(),
+                    proxy_mode: ProxyMode::System,
+                    antigravity_proxy_url: saved.into(),
                     proxy_antigravity: enabled,
+                    ..Default::default()
                 },
                 ..Default::default()
             };

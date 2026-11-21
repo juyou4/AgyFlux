@@ -69,7 +69,7 @@ import {
   type AccountQuotaValuation,
   type QuotaValuationResponse,
 } from '../utils/quotaValuation';
-import { accountModelQuotaRows } from '../utils/menuBarQuota';
+import { accountModelQuotaRows, weeklyQuotaItems } from '../utils/menuBarQuota';
 import { formatCurrencyCompact, type CurrencyMode } from '../utils/currency';
 import { copyToClipboard } from '../utils/clipboard';
 import { isTauri } from '../utils/env';
@@ -842,66 +842,274 @@ export default function Accounts() {
   };
 
   const renderPoolMeters = (acc: Account, compact = false) => {
-    const gemini = extractPoolWindow(acc, 'gemini', poolWindow);
-    const other = extractPoolWindow(acc, 'other', poolWindow);
-    const argon = extractPoolWindow(acc, 'argon', 'weekly');
-    const carbon = extractPoolWindow(acc, 'carbon', poolWindow);
+    const gemini5h = extractPoolWindow(acc, 'gemini', '5h');
+    const geminiWeek = extractPoolWindow(acc, 'gemini', 'weekly');
+    const other5h = extractPoolWindow(acc, 'other', '5h');
+    const otherWeek = extractPoolWindow(acc, 'other', 'weekly');
+    const argonWeek = extractPoolWindow(acc, 'argon', 'weekly');
+    const carbon5h = extractPoolWindow(acc, 'carbon', '5h');
+    const carbonWeek = extractPoolWindow(acc, 'carbon', 'weekly');
+    const extraWeekly = weeklyQuotaItems(acc.quota).filter(
+      (item) =>
+        !item.shared &&
+        item.title !== 'Gemini 4 Argon' &&
+        item.title !== 'Gemini 4 Carbon' &&
+        item.percentage !== null
+    );
 
-    const rows: {
-      key: 'gemini' | 'other' | 'argon' | 'carbon';
-      label: string;
-      win: PoolWindow;
-      data: ReturnType<typeof extractPoolWindow>;
-    }[] = [
-      { key: 'gemini', label: 'Gemini', win: poolWindow, data: gemini },
-      { key: 'other', label: 'Claude / GPT', win: poolWindow, data: other },
-    ];
-    if (argon.remaining !== null) {
-      rows.push({ key: 'argon', label: 'G4 Argon (W)', win: 'weekly', data: argon });
-    }
-    if (carbon.remaining !== null) {
-      rows.push({ key: 'carbon', label: 'G4 Carbon', win: poolWindow, data: carbon });
-    }
+    if (compact) {
+      const compactRows: {
+        key: 'gemini' | 'other' | 'argon' | 'carbon';
+        label: string;
+        primary: ReturnType<typeof extractPoolWindow>;
+        secondary?: ReturnType<typeof extractPoolWindow>;
+        secondaryTag?: string;
+      }[] = [
+        {
+          key: 'gemini',
+          label: 'Gemini',
+          primary: poolWindow === '5h' ? gemini5h : geminiWeek,
+          secondary: poolWindow === '5h' ? geminiWeek : gemini5h,
+          secondaryTag: poolWindow === '5h' ? (zh ? '周' : 'W') : '5H',
+        },
+        {
+          key: 'other',
+          label: 'Claude / GPT',
+          primary: poolWindow === '5h' ? other5h : otherWeek,
+          secondary: poolWindow === '5h' ? otherWeek : other5h,
+          secondaryTag: poolWindow === '5h' ? (zh ? '周' : 'W') : '5H',
+        },
+      ];
+      if (argonWeek.remaining !== null) {
+        compactRows.push({
+          key: 'argon',
+          label: zh ? 'Argon 周' : 'Argon (W)',
+          primary: argonWeek,
+        });
+      }
+      if (carbon5h.remaining !== null || carbonWeek.remaining !== null) {
+        compactRows.push({
+          key: 'carbon',
+          label: 'Carbon',
+          primary: poolWindow === '5h' && carbon5h.remaining !== null ? carbon5h : carbonWeek,
+          secondary: poolWindow === '5h' && carbon5h.remaining !== null ? carbonWeek : carbon5h,
+          secondaryTag: poolWindow === '5h' ? (zh ? '周' : 'W') : '5H',
+        });
+      }
 
-    return (
-      <div
-        className={
-          compact
-            ? 'grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4'
-            : 'rounded-[20px] bg-[var(--surface-soft)] p-4 space-y-2.5'
-        }
-      >
-        {rows.map((row) => {
-          const valInfo = compact ? null : valuationDisplayForPool(acc.id, row.key, row.win);
-          return (
+      return (
+        <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
+          {compactRows.map((row) => (
             <div key={row.key} className="group/meter">
-              <div className="mb-1 flex items-baseline justify-between gap-2">
+              <div className="mb-1 flex items-baseline justify-between gap-1.5">
                 <span className="truncate text-[11px] font-medium text-[var(--ink-secondary)]">
                   {row.label}
                 </span>
-                <div className="flex items-center gap-1.5 text-[11px] tabular-nums">
-                  {row.data.resetTime && !compact && (
-                    <span className="text-[10px] text-[var(--ink-muted)]">
-                      {formatShortCountdown(row.data.resetTime)}
+                <div className="flex shrink-0 items-center gap-1.5 text-[11px] tabular-nums">
+                  <span className="font-semibold text-[var(--ink)]">
+                    {row.primary.remaining === null ? '--' : `${Math.round(row.primary.remaining)}%`}
+                  </span>
+                  {row.secondary && row.secondary.remaining !== null && row.secondaryTag && (
+                    <span
+                      title={
+                        row.secondary.resetTime
+                          ? `${row.secondaryTag} · ${formatShortCountdown(row.secondary.resetTime)}`
+                          : row.secondaryTag
+                      }
+                      className="rounded-full bg-[var(--surface)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--ink-secondary)]"
+                    >
+                      {row.secondaryTag} {Math.round(row.secondary.remaining)}%
                     </span>
                   )}
-                  <span className="font-semibold text-[var(--ink)]">
-                    {row.data.remaining === null ? '--' : `${Math.round(row.data.remaining)}%`}
-                  </span>
                 </div>
               </div>
-              <MeterBar value={row.data.remaining} />
-              {valInfo && (
-                <div
-                  title={valInfo.title}
-                  className="mt-0.5 truncate text-[10px] tabular-nums text-[var(--ink-muted)]"
-                >
-                  {valInfo.line}
+              <MeterBar value={row.primary.remaining} />
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    const corePools: {
+      key: 'gemini' | 'other';
+      label: string;
+      win5h: ReturnType<typeof extractPoolWindow>;
+      winWeek: ReturnType<typeof extractPoolWindow>;
+    }[] = [
+      { key: 'gemini', label: 'Gemini', win5h: gemini5h, winWeek: geminiWeek },
+      { key: 'other', label: 'Claude / GPT', win5h: other5h, winWeek: otherWeek },
+    ];
+
+    const hasDedicated =
+      argonWeek.remaining !== null ||
+      carbon5h.remaining !== null ||
+      carbonWeek.remaining !== null ||
+      extraWeekly.length > 0;
+
+    return (
+      <div className="rounded-[20px] bg-[var(--surface-soft)] p-3.5 space-y-3">
+        {corePools.map((pool) => {
+          const valInfo = valuationDisplayForPool(acc.id, pool.key, poolWindow);
+          return (
+            <div key={pool.key} className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-[11px] font-semibold text-[var(--ink)]">
+                  {pool.label}
+                </span>
+                {valInfo && (
+                  <span
+                    title={valInfo.title}
+                    className="truncate text-[10px] tabular-nums text-[var(--ink-muted)]"
+                  >
+                    {valInfo.line}
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                {/* 5H 窗口 */}
+                <div className="group/meter min-w-0">
+                  <div className="mb-1 flex items-baseline justify-between gap-1 text-[10px] tabular-nums">
+                    <span
+                      className={
+                        poolWindow === '5h'
+                          ? 'font-semibold text-[var(--ink)]'
+                          : 'font-medium text-[var(--ink-muted)]'
+                      }
+                    >
+                      5H
+                    </span>
+                    <div className="flex items-baseline gap-1 min-w-0">
+                      {pool.win5h.resetTime && (
+                        <span className="truncate text-[9px] text-[var(--ink-muted)]">
+                          {formatShortCountdown(pool.win5h.resetTime)}
+                        </span>
+                      )}
+                      <span
+                        className={
+                          poolWindow === '5h'
+                            ? 'text-[11px] font-semibold text-[var(--ink)]'
+                            : 'text-[11px] font-medium text-[var(--ink-secondary)]'
+                        }
+                      >
+                        {pool.win5h.remaining === null ? '--' : `${Math.round(pool.win5h.remaining)}%`}
+                      </span>
+                    </div>
+                  </div>
+                  <MeterBar value={pool.win5h.remaining} />
                 </div>
-              )}
+
+                {/* 周额度窗口 */}
+                <div className="group/meter min-w-0">
+                  <div className="mb-1 flex items-baseline justify-between gap-1 text-[10px] tabular-nums">
+                    <span
+                      className={
+                        poolWindow === 'weekly'
+                          ? 'font-semibold text-[var(--ink)]'
+                          : 'font-medium text-[var(--ink-muted)]'
+                      }
+                    >
+                      {zh ? '周额度' : 'Weekly'}
+                    </span>
+                    <div className="flex items-baseline gap-1 min-w-0">
+                      {pool.winWeek.resetTime && (
+                        <span className="truncate text-[9px] text-[var(--ink-muted)]">
+                          {formatShortCountdown(pool.winWeek.resetTime)}
+                        </span>
+                      )}
+                      <span
+                        className={
+                          poolWindow === 'weekly'
+                            ? 'text-[11px] font-semibold text-[var(--ink)]'
+                            : 'text-[11px] font-medium text-[var(--ink-secondary)]'
+                        }
+                      >
+                        {pool.winWeek.remaining === null ? '--' : `${Math.round(pool.winWeek.remaining)}%`}
+                      </span>
+                    </div>
+                  </div>
+                  <MeterBar value={pool.winWeek.remaining} />
+                </div>
+              </div>
             </div>
           );
         })}
+
+        {hasDedicated && (
+          <div className="border-t border-[var(--border-hairline)] pt-2.5 space-y-2">
+            {argonWeek.remaining !== null && (
+              <div className="group/meter">
+                <div className="mb-1 flex items-baseline justify-between gap-2 text-[10px] tabular-nums">
+                  <span className="truncate font-medium text-[var(--ink-secondary)]">
+                    {zh ? 'G4 Argon · 周额度' : 'G4 Argon · Weekly'}
+                  </span>
+                  <div className="flex items-baseline gap-1.5">
+                    {argonWeek.resetTime && (
+                      <span className="text-[9px] text-[var(--ink-muted)]">
+                        {formatShortCountdown(argonWeek.resetTime)}
+                      </span>
+                    )}
+                    <span className="text-[11px] font-semibold text-[var(--ink)]">
+                      {Math.round(argonWeek.remaining)}%
+                    </span>
+                  </div>
+                </div>
+                <MeterBar value={argonWeek.remaining} />
+              </div>
+            )}
+
+            {(carbon5h.remaining !== null || carbonWeek.remaining !== null) && (
+              <div className="group/meter">
+                <div className="mb-1 flex items-baseline justify-between gap-2 text-[10px] tabular-nums">
+                  <span className="truncate font-medium text-[var(--ink-secondary)]">
+                    G4 Carbon
+                  </span>
+                  <div className="flex items-baseline gap-2">
+                    {carbon5h.remaining !== null && (
+                      <span className="text-[10px] text-[var(--ink-secondary)]">
+                        5H <strong className="text-[var(--ink)]">{Math.round(carbon5h.remaining)}%</strong>
+                      </span>
+                    )}
+                    {carbonWeek.remaining !== null && (
+                      <span className="text-[10px] text-[var(--ink-secondary)]">
+                        {zh ? '周' : 'W'}{' '}
+                        <strong className="text-[var(--ink)]">{Math.round(carbonWeek.remaining)}%</strong>
+                        {carbonWeek.resetTime ? ` · ${formatShortCountdown(carbonWeek.resetTime)}` : ''}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <MeterBar
+                  value={
+                    poolWindow === 'weekly' && carbonWeek.remaining !== null
+                      ? carbonWeek.remaining
+                      : carbon5h.remaining ?? carbonWeek.remaining
+                  }
+                />
+              </div>
+            )}
+
+            {extraWeekly.map((item) => (
+              <div key={item.id} className="group/meter">
+                <div className="mb-1 flex items-baseline justify-between gap-2 text-[10px] tabular-nums">
+                  <span className="truncate font-medium text-[var(--ink-secondary)]">
+                    {item.title} · {zh ? '周额度' : 'Weekly'}
+                  </span>
+                  <div className="flex items-baseline gap-1.5">
+                    {item.resetTime && (
+                      <span className="text-[9px] text-[var(--ink-muted)]">
+                        {formatShortCountdown(item.resetTime)}
+                      </span>
+                    )}
+                    <span className="text-[11px] font-semibold text-[var(--ink)]">
+                      {item.percentage === null ? '--' : `${Math.round(item.percentage)}%`}
+                    </span>
+                  </div>
+                </div>
+                <MeterBar value={item.percentage} />
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     );
   };

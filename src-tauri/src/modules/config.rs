@@ -157,6 +157,32 @@ mod tests {
             saved.proxy_mode = mode;
             assert_eq!(saved.antigravity_proxy_url().unwrap(), None);
         }
+
+        // 独立配置免 TUN 端口后，与 AgyFlux 自身代理模式（跟随系统 / 直连 / 手动 SOCKS5）互不干扰。
+        config.network.proxy_mode = ProxyMode::System;
+        config.network.proxy_url.clear();
+        config.network.proxy_antigravity = true;
+        for bad in ["socks5://localhost:1080", "http://user:password@localhost", "http://localhost/path"] {
+            config.network.antigravity_proxy_url = bad.into();
+            assert!(save_config_at(&path, &config).is_err());
+        }
+        config.network.antigravity_proxy_url = "http://127.0.0.1:7890/".into();
+        for mode in [ProxyMode::System, ProxyMode::Direct] {
+            config.network.proxy_mode = mode;
+            save_config_at(&path, &config).unwrap();
+            let reloaded = load_config_at(&path).unwrap().network;
+            assert_eq!(reloaded.antigravity_proxy_url().unwrap().as_deref(), Some("http://127.0.0.1:7890"));
+        }
+        config.network.proxy_mode = ProxyMode::Manual;
+        config.network.proxy_url = "socks5://127.0.0.1:1080".into();
+        save_config_at(&path, &config).unwrap();
+        let reloaded = load_config_at(&path).unwrap().network;
+        assert_eq!(reloaded.antigravity_proxy_url().unwrap().as_deref(), Some("http://127.0.0.1:7890"));
+        config.network.proxy_antigravity = false;
+        save_config_at(&path, &config).unwrap();
+        let disabled = load_config_at(&path).unwrap().network;
+        assert_eq!(disabled.antigravity_proxy_url().unwrap(), None);
+        assert_eq!(disabled.antigravity_proxy_url, "http://127.0.0.1:7890/");
     }
     #[test]
     fn hidden_card_positions_survive_toggle_reload_and_stale_general_save() {

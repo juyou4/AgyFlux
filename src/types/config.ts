@@ -79,8 +79,28 @@ export const DEFAULT_QUOTA_VALUATION_CONFIG: QuotaValuationConfig = {
 
 export type ProxyMode = 'system' | 'direct' | 'manual';
 
+export interface NetworkConfig {
+    proxy_mode: ProxyMode;
+    proxy_url: string;
+    proxy_antigravity?: boolean;
+    antigravity_proxy_url?: string;
+}
+
+export function resolveAntigravityProxyUrl(network?: NetworkConfig): string {
+    const dedicated = network?.antigravity_proxy_url?.trim();
+    if (dedicated) return dedicated;
+    if (network?.proxy_mode === 'manual') {
+        return network.proxy_url?.trim() || '';
+    }
+    return '';
+}
+
+export function isAntigravityProxyEnabled(network?: NetworkConfig): boolean {
+    return Boolean(network?.proxy_antigravity && resolveAntigravityProxyUrl(network));
+}
+
 export interface AppConfig {
-    network?: { proxy_mode: ProxyMode; proxy_url: string; proxy_antigravity?: boolean };
+    network?: NetworkConfig;
     dashboard?: DashboardPreferences;
     desktop?: DesktopPreferences;
     menu_bar?: MenuBarPreferences;
